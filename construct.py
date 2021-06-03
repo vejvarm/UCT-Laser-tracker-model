@@ -1,10 +1,12 @@
 import numpy as np
 
+
 class Environment:
     """
 
     """
     camera_to_wall_distance = 3  # m
+    camera_resolution = (800, 600)  # (width, height) px
 
 
 class Servo:
@@ -21,6 +23,7 @@ class Servo:
 
     # noinspection PyMethodParameters
     def __enforce_bounds(foo):
+        # this is obviously a decorator (go home PyCharm, you drunk)
         def wrap(self, angle):
             angle = max(min(angle, self.__angle_bounds[1]), self.__angle_bounds[0])
             out = foo(self, angle)
@@ -69,6 +72,32 @@ class Laser:
         self._servo_x = servos[0]
         self._servo_y = servos[1]
 
+        self.angle_x = servos[0].get_angle()
+        self.angle_y = servos[1].get_angle()
+
+        self.wall_pos_x = servos[0].get_dot_wall_position(self.angle_x)
+        self.wall_pos_y = servos[1].get_dot_wall_position(self.angle_y)
+
+    def move_x_y_tick(self, angle_x: int = None, angle_y: int = None):
+        """ move servos to specific angle, with consideration of servo speed and update the current wall positions
+
+        :param angle_x: (int) angle of servo moving along x (horizontal) axis (if None, keep last position)
+        :param angle_y: (int) angle of servo moving along y (vertical) axis
+        """
+        if angle_x is None:
+            angle_x = self.angle_x
+        if angle_y is None:
+            angle_y = self.angle_y
+
+        self._servo_x.move_to(angle_x)
+        self._servo_y.move_to(angle_y)
+
+        self.angle_x = self._servo_x.get_angle()
+        self.angle_y = self._servo_y.get_angle()
+
+        # update wall positions
+        self.wall_pos_x = self._servo_x.get_dot_wall_position(self.angle_x)
+        self.wall_pos_y = self._servo_y.get_dot_wall_position(self.angle_y)
 
 class Construct:
     """
@@ -79,3 +108,6 @@ class Construct:
     def __init__(self, lasers=(Laser(), Laser())):
         self._laser_red = lasers[0]
         self._laser_green = lasers[1]
+
+    def run(self):
+        pass
