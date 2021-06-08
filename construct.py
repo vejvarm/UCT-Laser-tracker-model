@@ -1,4 +1,5 @@
 import numpy as np
+from matplotlib import pyplot as plt
 
 
 class Environment:
@@ -40,6 +41,21 @@ class Environment:
         ppm = resolution/fov
 
         return ppm
+
+
+class PathGenerator:
+
+    def __init__(self, resolution=Environment.camera_resolution):
+        self.resolution = resolution
+
+    def circle(self, scale=0.5):
+        center = [r//2 for r in self.resolution]
+        radius = [(r - c)*scale for r, c in zip(self.resolution, center)]
+
+        # TODO: calculate points of a circle (goniometry)
+        # TODO: make function for pixel->angle / angle->pixel position conversion
+
+        print(radius)
 
 
 class Servo:
@@ -108,7 +124,6 @@ class Servo:
         return int(pixel_distance)
         # TODO: TEST if correct! convert to pixel equivalent with given camera resolution
         # TODO: Ensure boundaries
-        # TODO: Make simple GUI for showing 2D position
 
 
 class Laser:
@@ -165,9 +180,78 @@ class Construct:
     """
     __vertical_laser_distance = 0.2  # m
 
-    def __init__(self, lasers=(Laser(), Laser())):
+    def __init__(self, lasers=(Laser(), Laser()), visualize=False):
         self._laser_red = lasers[0]
         self._laser_green = lasers[1]
 
+        self.visualize = visualize
+
+        if self.visualize:
+            self.wall = Wall(blit=True)
+
     def run(self):
         pass
+
+        # __ for each tick __
+
+        # move red laser based on some pattern/path generator
+
+        # move green laser based on agent decision
+
+        # draw wall one tick (if visualize==True)
+
+
+class Wall:
+    """
+
+    """
+
+    def __init__(self, resolution=Environment.camera_resolution, blit=False):
+        self.resolution = resolution
+        self.blit = blit
+        self.fig, self.ax = plt.subplots()
+
+        self.ax.set_xlim([0, self.resolution[0]])
+        self.ax.set_ylim([0, self.resolution[1]])
+
+        self.generator = np.random.default_rng()
+
+        center = [r//2 for r in self.resolution]
+
+        self.stm_red = self.ax.stem([center[0]], [center[1]], linefmt="none", markerfmt="rx", basefmt="none")
+        self.stm_grn = self.ax.stem([center[0]], [center[1]], linefmt="none", markerfmt="go", basefmt="none")
+
+        self.fig.canvas.draw()
+
+        if self.blit:
+            # cache the background
+            self.bcgrd = self.fig.canvas.copy_from_bbox(self.ax.bbox)
+
+        plt.show(block=False)
+
+    def update(self, red_pos=(0, 0), grn_pos=(0, 0)):
+        """ one step of wall update to show current position of lasers
+
+        :param red_pos: Tuple[int] x and y position of the red laser
+        :param grn_pos: Tuple[ind] x and y position of the green laser
+        """
+        rng = self.generator.integers(0, self.resolution[1], size=4)
+        # set new data
+        self.stm_red.markerline.set_data(red_pos[0], red_pos[1])
+        self.stm_grn.markerline.set_data(grn_pos[0], grn_pos[0])
+
+        if self.blit:
+            # restore background
+            self.fig.canvas.restore_region(self.bcgrd)
+
+            # draw artists
+            self.ax.draw_artist(self.stm_red.markerline)
+            self.ax.draw_artist(self.stm_grn.markerline)
+
+            # fill in the axes rectangle
+            self.fig.canvas.blit(self.ax.bbox)
+        else:
+            self.fig.canvas.draw()
+
+        self.fig.canvas.flush_events()
+
