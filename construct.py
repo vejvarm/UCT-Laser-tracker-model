@@ -32,7 +32,7 @@ class Environment:
         """
 
         :param fov: (float) field of view in meters
-        :param axis: (0) axis for which fov is calculated | Horizontal (0) | Vertical (1) |
+        :param axis: (int) axis for which fov is calculated | Horizontal (0) | Vertical (1) |
         :return ppm: (float) pixels per meter
         """
 
@@ -41,6 +41,19 @@ class Environment:
         ppm = resolution/fov
 
         return ppm
+
+    def meter_to_pixel_position(self, pos_meters: float, ppm: float, axis: int):
+        """
+
+        :param pos_meters: (float) position of laser point from center in [meters]
+        :param ppm: (float) number of pixels per one meter
+        :param axis: (int) axis for which conversion is calculated | Horizontal (0) | Vertical (1) |
+        :return pos_pixels: (int) position of laser point from center in [pixels]
+        """
+        return int(self.camera_resolution[axis]/2 + ppm * pos_meters)
+
+    def pixel_to_angle(self):
+        pass
 
 
 class PathGenerator:
@@ -101,6 +114,16 @@ class Servo:
             self._angle = min(self._angle + self.__speed, angle)
 
     @__enforce_bounds
+    def angle_to_meters(self, angle):
+        """ convert servo angle to meter distance from __default_angle position ("center")
+
+        :param angle: (int) current angle of the servo
+        :return meter_pos: (float) distance of laser point from "center" in meters
+        """
+        wall_dist = self.e.camera_to_wall_distance
+        return np.tan(np.deg2rad(self.__default_angle - angle))*wall_dist
+
+    @__enforce_bounds
     def get_dot_wall_position(self, angle, fov, axis=0):
         """ calculate position of laser dot on wall based on goniometric functions
         and angles of the servo
@@ -110,18 +133,13 @@ class Servo:
         :param axis: (int) either horizontal (0) or vertical (1) axis
         :return position: Tuple[int] position of dot [pixels]
         """
-        wall_dist = self.e.camera_to_wall_distance
-        pixel_resolution = self.e.camera_resolution
-
-        # aov, fov = self.e.get_fov()
-
-        meter_distance = np.tan(np.deg2rad(self.__default_angle - angle))*wall_dist
+        pos_meters = self.angle_to_meters(angle)
 
         ppm = self.e.get_ppm(fov, axis)  # pixels per meter
 
-        pixel_distance = pixel_resolution[axis]/2 + ppm*meter_distance
+        pos_pixels = self.e.meter_to_pixel_position(pos_meters, ppm, axis)
 
-        return int(pixel_distance)
+        return pos_pixels
         # TODO: TEST if correct! convert to pixel equivalent with given camera resolution
         # TODO: Ensure boundaries
 
