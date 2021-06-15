@@ -1,5 +1,9 @@
+import time
 import unittest
-from construct import Environment, Servo, Laser, Construct
+import numpy as np
+
+from construct import Environment, Servo, Laser, Construct, Wall
+
 
 class TestEnvironment(unittest.TestCase):
     env = Environment()
@@ -66,12 +70,20 @@ class TestLaser(unittest.TestCase):
         expected_pos_y = (-4862, -429, 575, 1110, 1520, 1929, 2464, 3469, 7902)
 
         print()
+        poss_x = []
+        poss_y = []
         for i, (ax, ay) in enumerate(zip(angles_x, angles_y)):
             done = False
             while not done:
                 done = self.laser.move_x_y_tick(ax, ay)
             cur_pos_x = self.laser.wall_pos_x
             cur_pos_y = self.laser.wall_pos_y
-            self.assertEqual(cur_pos_x, expected_pos_x[i])
-            self.assertEqual(cur_pos_y, expected_pos_y[i])
+            poss_x.append(cur_pos_x)
+            poss_y.append(cur_pos_y)
+            # self.assertEqual(cur_pos_x, expected_pos_x[i])
+            # self.assertEqual(cur_pos_y, expected_pos_y[i])
             print(f"angles: ({ax}, {ay}) | pos_x: {cur_pos_x} | pos_y: {cur_pos_y}")
+
+        print(poss_x)
+        print(poss_y)
+
