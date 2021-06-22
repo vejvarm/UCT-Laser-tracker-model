@@ -18,8 +18,6 @@ if __name__ == '__main__':
     row_angles = list(range(50, 131, 10))
     column_angles = np.array([[d]*len(row_angles) for d in row_angles]).flatten()
 
-    print(column_angles)
-
     angles = itertools.cycle(column_angles)
     angles2 = itertools.cycle(row_angles)
 
@@ -50,7 +48,7 @@ if __name__ == '__main__':
         j = 0
 
         while not done_red and not done_green:
-            done_red = laser_red.move_x_y_tick(ax, a)
+            done_red = laser_red.move_x_y_tick(ax, ay)
             done_green = laser_green.move_x_y_tick(a2, a1)
             red_pos = (laser_red.wall_pos_x, laser_red.wall_pos_y)
             green_pos = (laser_green.wall_pos_x, laser_green.wall_pos_y)
