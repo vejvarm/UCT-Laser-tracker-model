@@ -7,15 +7,46 @@ from construct import Environment, Servo, Laser, Construct, Wall
 
 class TestEnvironment(unittest.TestCase):
     env = Environment()
-    fov = env.get_fov()
+    aov, fov = env.get_fov()
 
     def test_get_fov(self):
-        fov = self.env.get_fov()
+        aov, fov = self.env.get_fov()
+        self.assertEqual(aov, self.aov)
         self.assertEqual(fov, self.fov)
-        print(fov)
+        print(aov, fov)
 
     def test_get_ppm(self):
         pass
+
+    def test_meter_pixel_conversion(self):
+        axes = (0, 1)
+        distances = [r+0.1 for r in range(0, 21, 2)]  # meters
+
+        for fov_choice in self.fov:
+            for axis in axes:
+                ppm = self.env.get_ppm(fov_choice, axis)
+                for pos_meters in distances:
+                    pos_pixels = self.env.meter_to_pixel(pos_meters, ppm, axis)
+                    pos_meters_back = self.env.pixel_to_meter(pos_pixels, ppm, axis)
+
+                    self.assertAlmostEqual(pos_meters, pos_meters_back, places=2)
+                    print(pos_meters, pos_meters_back)
+
+    def test_angle_conversion_consistency(self):
+        angles1 = range(1, 180, 10)
+        angles2 = range(180, 1, -10)
+
+        for angle1, angle2 in zip(angles1, angles2):
+            x = self.env.angle_to_meter(angle1, angle2)
+            y = self.env.angle_to_meter(angle2, angle1)
+
+            a1 = self.env.meter_to_angle(x, angle2)
+            a2 = self.env.meter_to_angle(y, angle1)
+
+            print(a1, a2)
+
+            self.assertEqual(angle1, a1)
+            self.assertEqual(angle2, a2)
 
 
 class TestServo(unittest.TestCase):
@@ -56,7 +87,6 @@ class TestServo(unittest.TestCase):
         pixel_distance = self.servo.get_dot_wall_position(angle, fov)
 
         print(pixel_distance)
-
 
 class TestLaser(unittest.TestCase):
 

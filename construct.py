@@ -42,7 +42,7 @@ class Environment:
 
         return ppm
 
-    def meter_to_pixel_position(self, pos_meters: float, ppm: float, axis: int):
+    def meter_to_pixel(self, pos_meters: float, ppm: float, axis: int):
         """
 
         :param pos_meters: (float) position of laser point from center in [meters]
@@ -50,10 +50,42 @@ class Environment:
         :param axis: (int) axis for which conversion is calculated | Horizontal (0) | Vertical (1) |
         :return pos_pixels: (int) position of laser point from center in [pixels]
         """
-        return int(self.camera_resolution[axis]/2 + ppm * pos_meters)
+        return int(np.round(self.camera_resolution[axis]/2 + ppm * pos_meters))
 
-    def pixel_to_angle(self):
-        pass
+    def pixel_to_meter(self, pos_pixels: int, ppm: float, axis: int):
+        """
+
+        :param pos_pixels: (int) position of laser point from center in [pixels]
+        :param ppm: (float) number of pixels per one meter
+        :param axis: (int) axis for which conversion is calculated | Horizontal (0) | Vertical (1) |
+        :return pos_meters: (float) position of laser point from center in [meters]
+        """
+        return (pos_pixels-self.camera_resolution[axis]/2)/ppm
+
+    def angle_to_meter(self, angle, angle2=90, angle_defaults=(90, 90)):
+        """ convert servo angle to meter distance from _default_angle position ("center")
+
+        :param angle: (int) current angle of the servo
+        :param angle2: (int) angle of the secondary axis (if 90, it has no effect) [degrees]
+        :param angle_defaults: (Tuple[int]) default angles of both axes [degrees]
+        :return meter_pos: (float) distance of laser point from "center" in meters
+        """
+        wall_dist = self.camera_to_wall_distance
+        alpha = np.deg2rad(angle_defaults[0] - angle)
+        beta = np.deg2rad(angle_defaults[1] - angle2)
+        return wall_dist*np.tan(alpha)/np.cos(beta)
+
+    def meter_to_angle(self, dist_meters, angle2=90, angle_defaults=(90, 90)):
+        """ convert meter position on wall to angle distance from _default_angle position ("center")
+
+        :param dist_meters: (float) distance of laser point from "center" in meters
+        :param angle2: (int) angle of the secondary axis (if 90, it has no effect) [degrees]
+        :param angle_defaults: (Tuple[int]) default angles of both axes [degrees]
+        :return angle: (int) respective angle of the servo
+        """
+        wall_dist = self.camera_to_wall_distance  # [meters]
+        beta = np.deg2rad(angle_defaults[1] - angle2)  # [radians]
+        return int(np.round(angle_defaults[0] - np.rad2deg(np.arctan(dist_meters*np.cos(beta)/wall_dist))))
 
 
 class PathGenerator:
@@ -62,6 +94,7 @@ class PathGenerator:
         self.resolution = resolution
 
     def ellipse(self, scale=0.5, resolution=0.1*np.pi, circle=False):
+        """ :return pixel positions of ellipse points"""
         center = [r//2 for r in self.resolution]
         radius = [(r - c)*scale for r, c in zip(self.resolution, center)]
 
@@ -130,29 +163,6 @@ class Servo:
             self._angle = min(self._angle + self.__speed, angle)
 
     @__enforce_bounds
-    def angle_to_meters(self, angle, angle2=90, angle2_default=90):
-        """ convert servo angle to meter distance from _default_angle position ("center")
-
-        :param angle: (int) current angle of the servo
-        :param angle2: (int) angle of the secondary axis (if 90, it has no effect) [degrees]
-        :param angle2_default: (int) default angle of the secondary axis [degrees]
-        :return meter_pos: (float) distance of laser point from "center" in meters
-        """
-        wall_dist = self.e.camera_to_wall_distance
-        alpha = np.deg2rad(self._default_angle - angle)
-        beta = np.deg2rad(angle2_default - angle2)
-        return wall_dist*np.tan(alpha)/np.cos(beta)
-
-    def meters_to_angle(self, meters):
-        """ convert meter position on wall to angle distance from _default_angle position ("center")
-
-        :param meters: (float) distance of laser point from "center" in meters
-        :return angle: (int) respective angle of the servo
-        """
-        wall_dist = self.e.camera_to_wall_distance
-        return
-
-    @__enforce_bounds
     def get_dot_wall_position(self, angle, fov, axis=0, angle2=90, angle2_default=90):
         """ calculate position of laser dot on wall based on goniometric functions
         and angles of the servo
@@ -164,11 +174,11 @@ class Servo:
         :param angle2_default: (int) default angle of the secondary axis [degrees]
         :return position: Tuple[int] position of dot [pixels]
         """
-        pos_meters = self.angle_to_meters(angle, angle2, angle2_default)
+        pos_meters = self.e.angle_to_meter(angle, angle2, (self._default_angle, angle2_default))
 
         ppm = self.e.get_ppm(fov, axis)  # pixels per meter
 
-        pos_pixels = self.e.meter_to_pixel_position(pos_meters, ppm, axis)
+        pos_pixels = self.e.meter_to_pixel(pos_meters, ppm, axis)
 
         return pos_pixels
         # TODO: TEST if correct! convert to pixel equivalent with given camera resolution
@@ -179,30 +189,36 @@ class Laser:
     """
 
     """
-    def __init__(self, env=Environment(), servos=(Servo(), Servo())):
+    def __init__(self, env=Environment(), servos=(None, None)):
         self._env = env
 
-        self._servo_x = servos[0]
-        self._servo_y = servos[1]
+        if servos[0] is None:
+            self._servo_x = Servo()
+        else:
+            self._servo_x = servos[0]
+        if servos[1] is None:
+            self._servo_y = Servo()
+        else:
+            self._servo_y = servos[1]
 
-        self.default_angle_x = servos[0].get_default_angle()
-        self.default_angle_y = servos[1].get_default_angle()
+        self.default_angle_x = self._servo_x.get_default_angle()
+        self.default_angle_y = self._servo_y.get_default_angle()
 
-        self.angle_x = servos[0].get_angle()
-        self.angle_y = servos[1].get_angle()
+        self.angle_x = self._servo_x.get_angle()
+        self.angle_y = self._servo_y.get_angle()
 
         self.aov, self.fov = self._env.get_fov()  # (x, y) [deg], (x, y) [m]
 
-        self.wall_pos_x = servos[0].get_dot_wall_position(self.angle_x,
-                                                          self.fov[0],
-                                                          axis=0,
-                                                          angle2=self.angle_y,
-                                                          angle2_default=self.default_angle_y)
-        self.wall_pos_y = servos[1].get_dot_wall_position(self.angle_y,
-                                                          self.fov[1],
-                                                          axis=1,
-                                                          angle2=self.angle_x,
-                                                          angle2_default=self.default_angle_x)
+        self.wall_pos_x = self._servo_x.get_dot_wall_position(self.angle_x,
+                                                              self.fov[0],
+                                                              axis=0,
+                                                              angle2=self.angle_y,
+                                                              angle2_default=self.default_angle_y)
+        self.wall_pos_y = self._servo_y.get_dot_wall_position(self.angle_y,
+                                                              self.fov[1],
+                                                              axis=1,
+                                                              angle2=self.angle_x,
+                                                              angle2_default=self.default_angle_x)
 
     def set_fov(self, fov: tuple):
         self.fov = fov
