@@ -103,13 +103,13 @@ class PathGenerator:
         if circle:
             radius = [min(radius)]*2  # pick smaller radius to make a circle
 
-        x = radius[0]*np.cos(alpha)
-        y = radius[1]*np.sin(alpha)
+        x = center[0] + radius[0]*np.cos(alpha)
+        y = center[1] + radius[1]*np.sin(alpha)
 
         return x, y
 
-        # TODO: calculate points of a circle (goniometry)
-        # TODO: make function for pixel->angle / angle->pixel position conversion
+        # DONE: calculate points of a circle (goniometry)
+        # DONE: make function for pixel->angle / angle->pixel position conversion
 
 
 class Servo:
@@ -181,7 +181,7 @@ class Servo:
         pos_pixels = self.e.meter_to_pixel(pos_meters, ppm, axis)
 
         return pos_pixels
-        # TODO: TEST if correct! convert to pixel equivalent with given camera resolution
+        # DONE: TEST if correct! convert to pixel equivalent with given camera resolution
         # TODO: Ensure boundaries
 
 

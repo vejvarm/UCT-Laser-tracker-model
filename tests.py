@@ -88,6 +88,7 @@ class TestServo(unittest.TestCase):
 
         print(pixel_distance)
 
+
 class TestLaser(unittest.TestCase):
 
     laser = Laser()
