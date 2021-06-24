@@ -23,13 +23,13 @@ def generate_ellipse_angles(xs, ys, env):
         xas.append(xa)
         yas.append(ya)
 
-    return itertools.cycle(xas), itertools.cycle(yas)
+    return xas, yas
 
 
 if __name__ == '__main__':
     laser_red = Laser()
     laser_green = Laser()
-    wall = Wall()
+    wall = Wall(blit=True)
     generator = np.random.default_rng()
     path_gen = PathGenerator()
     env = Environment()
@@ -40,12 +40,8 @@ if __name__ == '__main__':
     angles = itertools.cycle(column_angles)
     angles2 = itertools.cycle(row_angles)
 
-    xs_red, ys_red = path_gen.ellipse(scale=0.9, resolution=0.05*np.pi, circle=True)
-    xs_green, ys_green = path_gen.ellipse(scale=0.5, resolution=0.05*np.pi, circle=True)
-
-    # convert pixel path to servo angles
-    xas_red, yas_red = generate_ellipse_angles(xs_red, ys_red, env)
-    xas_green, yas_green = generate_ellipse_angles(xs_green, ys_green, env)
+    xas_red, yas_red = path_gen.ellipse(scale=0.9, resolution=0.05*np.pi, circle=True, return_angles=True)
+    xas_green, yas_green = path_gen.ellipse(scale=0.5, resolution=0.05*np.pi, circle=True, return_angles=True)
 
     for xa_red, ya_red, xa_green, ya_green in zip(xas_red, yas_red, xas_green, yas_green):
         # ang = generator.integers(50, 130, size=4)
@@ -59,11 +55,10 @@ if __name__ == '__main__':
             done_green = laser_green.move_x_y_tick(xa_green, ya_green)
             red_pos = (laser_red.wall_pos_x, laser_red.wall_pos_y)
             green_pos = (laser_green.wall_pos_x, laser_green.wall_pos_y)
-            j += 1
             wall.update(red_pos, green_pos)
             time.sleep(0.05)
 
         # print([abs(r - g) for r, g in zip(red_pos, green_pos)])
         # DONE: test, if the cos(Beta) in calculating wall position is actually correct!!!!
         # DONE: the lasers seem to move together??? -- SOLVED
-        # TODO: move this to Construct class when it works
+        # DONE: move this to Construct class when it works

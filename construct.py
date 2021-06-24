@@ -1,3 +1,5 @@
+import itertools
+
 import numpy as np
 from matplotlib import pyplot as plt
 
@@ -91,10 +93,18 @@ class Environment:
 class PathGenerator:
 
     def __init__(self, resolution=Environment.camera_resolution):
+        self.env = Environment()
         self.resolution = resolution
 
-    def ellipse(self, scale=0.5, resolution=0.1*np.pi, circle=False):
-        """ :return pixel positions of ellipse points"""
+    def ellipse(self, scale=0.5, resolution=0.1*np.pi, circle=False, return_angles=False):
+        """ generate pixel or servo angle points, which result in elliptical shape
+
+        :param scale: (float) [0 to 1] size of the shape with respect to the size of working area
+        :param resolution: (float) period (distance) of points in the shape
+        :param circle: (bool) if True, calculate shape to be a circle | else it's an ellipse
+        :param return_angles: if True, return angles of servos | else return pixel positions
+        :return pixel positions/angles of ellipse/circle points
+        """
         center = [r//2 for r in self.resolution]
         radius = [(r - c)*scale for r, c in zip(self.resolution, center)]
 
@@ -106,7 +116,28 @@ class PathGenerator:
         x = center[0] + radius[0]*np.cos(alpha)
         y = center[1] + radius[1]*np.sin(alpha)
 
-        return x, y
+        if return_angles:
+            x, y = self._generate_ellipse_angles(x, y)
+
+        return itertools.cycle(x), itertools.cycle(y)
+
+    def _generate_ellipse_angles(self, xs, ys):
+        # convert pixel path to servo angles
+        aov, fov = self.env.get_fov()
+        ppm_x = self.env.get_ppm(fov[1], axis=1)
+        ppm_y = self.env.get_ppm(fov[0], axis=0)
+
+        xas, yas = list(), list()
+        ya = 90
+        for x, y in zip(xs, ys):
+            xm = self.env.pixel_to_meter(x, ppm_x, axis=0)
+            ym = self.env.pixel_to_meter(y, ppm_y, axis=1)
+            xa = self.env.meter_to_angle(xm, ya)
+            ya = self.env.meter_to_angle(ym, xa)
+            xas.append(xa)
+            yas.append(ya)
+
+        return xas, yas
 
         # DONE: calculate points of a circle (goniometry)
         # DONE: make function for pixel->angle / angle->pixel position conversion
@@ -267,25 +298,97 @@ class Construct:
     """
     __vertical_laser_distance = 0.2  # m
 
-    def __init__(self, lasers=(Laser(), Laser()), visualize=False):
-        self._laser_red = lasers[0]
-        self._laser_green = lasers[1]
+    def __init__(self, lasers=(None, None), visualize=False):
+        """
+
+        :param lasers:
+        :param visualize:
+        """
+        if lasers[0] is None:
+            self._laser_red = Laser()
+        else:
+            self._laser_red = lasers[0]
+        if lasers[1] is None:
+            self._laser_green = Laser()
+        else:
+            self._laser_green = lasers[1]
+
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
 
         self.visualize = visualize
 
         if self.visualize:
             self.wall = Wall(blit=True)
+        else:
+            self.wall = None
+
+        self.path_gen = PathGenerator()
+        self.env = Environment()
+
+    def _generate_path(self, path_type="circle", **kwargs):
+        if "scale" in kwargs.keys():
+            scale = kwargs["scale"]
+        else:
+            scale = 0.9
+        if "resolution" in kwargs.keys():
+            resolution = kwargs["resolution"]
+        else:
+            resolution = 0.1
+
+        if path_type == "circle":
+            x, y = self.path_gen.ellipse(scale=scale, resolution=resolution * np.pi, circle=True, return_angles=True)
+        elif path_type == "ellipse":
+            x, y = self.path_gen.ellipse(scale=scale, resolution=resolution * np.pi, circle=False, return_angles=True)
+        else:
+            raise NotImplementedError("Chosen path type doesn't exist/is not implemented yet.")
+
+        return x, y
 
     def run(self):
-        pass
+        angles_x_red, angles_y_red = self._generate_path()  # TODO: pass through the arguments as well
 
         # __ for each tick __
+        for ax, ay in zip(angles_x_red, angles_y_red):
+            done_red = False
 
-        # move red laser based on some pattern/path generator
+            while not done_red:
+                # move red laser based on pattern/path from path_gen
+                done_red = self._laser_red.move_x_y_tick(ax, ay)
 
-        # move green laser based on agent decision
+                # update red laser position
+                self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
 
-        # draw wall one tick (if visualize==True)
+                # move green laser based on agent decision
+
+                # update green laser position
+                self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+
+                # draw wall one tick (if visualize==True)
+                if self.visualize:
+                    self.wall.update(self.red_pos, self.green_pos)  # TODO: allow for sparse updates!
+
+
+class Agent:
+
+    def __init__(self, env, red_laser, green_laser, net_hidden_shape=(10, )):
+        self.env = env
+        self.red_laser = red_laser
+        self.green_laser = green_laser
+
+        rng = np.random.default_rng()
+
+        self.net = (rng.standard_normal(4),  # 4 inputs (pixel positions of both lasers)
+                    rng.standard_normal(net_hidden_shape),  # hidden layer
+                    rng.standard_normal(2))  # 2 outputs (red servo angles)
+        # TODO: continue creating net using pytorch/tensorflow
+
+    def cost(self):
+        """ euclidean distance cost function """
+        return np.sqrt((self.red_laser.wall_pos_x - self.green_laser.wall_pos_x)**2 + (self.red_laser.wall_pos_y - self.green_laser.wall_pos_y)**2)
+
+    def pid(self):
+        pass
 
 
 class Wall:
