@@ -147,10 +147,10 @@ class Servo:
     """
 
     """
-    __angle_bounds = (0, 180)  # degrees
     __speed = 10  # deg/tick
     __slippage = 0  # deg (UNIMPLEMENTED)
 
+    _angle_bounds = (0, 180)  # degrees
     _default_angle = 90  # degrees
 
     def __init__(self):
@@ -161,14 +161,14 @@ class Servo:
     def __enforce_bounds(foo):
         # this is obviously a decorator (go home PyCharm, you drunk)
         def wrap(self, angle, *args, **kwargs):
-            angle = max(min(angle, self.__angle_bounds[1]), self.__angle_bounds[0])
+            angle = max(min(angle, self._angle_bounds[1]), self._angle_bounds[0])
             out = foo(self, angle, *args, **kwargs)
             return out
 
         return wrap
 
     def get_settings(self):
-        return self.__angle_bounds, self._default_angle, self.__speed, self.__slippage
+        return self._angle_bounds, self._default_angle, self.__speed, self.__slippage
 
     def get_angle(self):
         return self._angle
@@ -326,6 +326,8 @@ class Construct:
         self.path_gen = PathGenerator()
         self.env = Environment()
 
+        self.default_path_x, self.default_path_y = self._generate_path()
+
     def _generate_path(self, path_type="circle", **kwargs):
         if "scale" in kwargs.keys():
             scale = kwargs["scale"]
@@ -345,6 +347,25 @@ class Construct:
 
         return x, y
 
+    def step(self, x=None, y=None, green=False):
+        if x is None:
+            x = next(self.default_path_x)
+        if y is None:
+            y = next(self.default_path_y)
+
+        if green:
+            # move green laser based on inputs/path from path_gen
+            done = self._laser_green.move_x_y_tick(x, y)
+            # update green laser position
+            self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+        else:
+            # move red laser based on inputs/path from path_gen
+            done = self._laser_red.move_x_y_tick(x, y)
+            # update red laser position
+            self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+
+        return done
+
     def run(self):
         angles_x_red, angles_y_red = self._generate_path()  # TODO: pass through the arguments as well
 
@@ -353,11 +374,9 @@ class Construct:
             done_red = False
 
             while not done_red:
-                # move red laser based on pattern/path from path_gen
-                done_red = self._laser_red.move_x_y_tick(ax, ay)
 
-                # update red laser position
-                self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+                # move and update red laser positions
+                done_red = self.step(ax, ay)
 
                 # move green laser based on agent decision
 
@@ -367,28 +386,6 @@ class Construct:
                 # draw wall one tick (if visualize==True)
                 if self.visualize:
                     self.wall.update(self.red_pos, self.green_pos)  # TODO: allow for sparse updates!
-
-
-class Agent:
-
-    def __init__(self, env, red_laser, green_laser, net_hidden_shape=(10, )):
-        self.env = env
-        self.red_laser = red_laser
-        self.green_laser = green_laser
-
-        rng = np.random.default_rng()
-
-        self.net = (rng.standard_normal(4),  # 4 inputs (pixel positions of both lasers)
-                    rng.standard_normal(net_hidden_shape),  # hidden layer
-                    rng.standard_normal(2))  # 2 outputs (red servo angles)
-        # TODO: continue creating net using pytorch/tensorflow
-
-    def cost(self):
-        """ euclidean distance cost function """
-        return np.sqrt((self.red_laser.wall_pos_x - self.green_laser.wall_pos_x)**2 + (self.red_laser.wall_pos_y - self.green_laser.wall_pos_y)**2)
-
-    def pid(self):
-        pass
 
 
 class Wall:
