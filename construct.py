@@ -254,19 +254,25 @@ class Laser:
     def set_fov(self, fov: tuple):
         self.fov = fov
 
-    def move_x_y_tick(self, angle_x: int = None, angle_y: int = None):
+    def move_x_y_tick(self, angle_x: int = None, angle_y: int = None, speed_restrictions=True):
         """ move servos to specific angle, with consideration of servo speed and update the current wall positions
 
         :param angle_x: (int) angle of servo moving along x (horizontal) axis (if None, keep last position)
         :param angle_y: (int) angle of servo moving along y (vertical) axis
+        :param speed_restrictions: (bool) if False, angle increments are not restricted by servo speed
         """
+        # Something here is not differentiable: TODO: SOLVE to compute gradients!
         if angle_x is None:
             angle_x = self.angle_x
         if angle_y is None:
             angle_y = self.angle_y
 
-        self._servo_x.move_to(angle_x)
-        self._servo_y.move_to(angle_y)
+        if speed_restrictions:
+            self._servo_x.move_to(angle_x)
+            self._servo_y.move_to(angle_y)
+        else:
+            self._servo_x.set_angle(angle_x)
+            self._servo_y.set_angle(angle_y)
 
         self.default_angle_x = self._servo_x.get_default_angle()
         self.default_angle_y = self._servo_y.get_default_angle()
@@ -347,7 +353,7 @@ class Construct:
 
         return x, y
 
-    def step(self, x=None, y=None, green=False):
+    def step(self, x=None, y=None, green=False, speed_restrictions=True):
         if x is None:
             x = next(self.default_path_x)
         if y is None:
@@ -355,16 +361,18 @@ class Construct:
 
         if green:
             # move green laser based on inputs/path from path_gen
-            done = self._laser_green.move_x_y_tick(x, y)
+            done = self._laser_green.move_x_y_tick(x, y, speed_restrictions)
             # update green laser position
             self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
         else:
             # move red laser based on inputs/path from path_gen
-            done = self._laser_red.move_x_y_tick(x, y)
+            done = self._laser_red.move_x_y_tick(x, y, speed_restrictions)
             # update red laser position
             self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
 
-        return done
+            # TODO: reimplement the done indicator!
+
+            return self.green_pos if green else self.red_pos
 
     def run(self):
         angles_x_red, angles_y_red = self._generate_path()  # TODO: pass through the arguments as well
@@ -376,7 +384,7 @@ class Construct:
             while not done_red:
 
                 # move and update red laser positions
-                done_red = self.step(ax, ay)
+                done_red, _ = self.step(ax, ay)
 
                 # move green laser based on agent decision
 
@@ -421,8 +429,10 @@ class Wall:
         :param grn_pos: Tuple[ind] x and y position of the green laser
         """
         # set new data
-        self.stm_red.markerline.set_data(red_pos[0], red_pos[1])
-        self.stm_grn.markerline.set_data(grn_pos[0], grn_pos[1])
+        if 0 < red_pos[0] < self.resolution[0] and 0 < red_pos[1] < self.resolution[1]:
+            self.stm_red.markerline.set_data(red_pos[0], red_pos[1])
+        if 0 < grn_pos[0] < self.resolution[0] and 0 < grn_pos[1] < self.resolution[1]:
+            self.stm_grn.markerline.set_data(grn_pos[0], grn_pos[1])
 
         if self.blit:
             # restore background
