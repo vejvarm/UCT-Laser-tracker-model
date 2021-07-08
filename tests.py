@@ -48,6 +48,15 @@ class TestEnvironment(unittest.TestCase):
             self.assertEqual(angle1, a1)
             self.assertEqual(angle2, a2)
 
+    def test_angle_to_pixel_conversion(self):
+        axes = (0, 1)
+        angles1 = range(0, 181, 10)  # degrees
+        angles2 = range(180, -1, -10)  # degrees
+
+        for a1, a2 in zip(angles1, angles2):
+            x, y = self.env.angle_to_pixel((a1, a2))
+
+            print((a1, a2), (x, y))
 
 class TestServo(unittest.TestCase):
 

@@ -66,11 +66,12 @@ class Agent:
                 with tf.GradientTape() as tape:
                     red_batch_angle_pred = self.net(red_grn_batch_train, training=True)  # red laser angle prediction
 
-                    # doesn't calculate gradients TODO: MAKE DIFFERENTIABLE! or some other solution
-                    red_pos_batch = tf.map_fn(lambda x: tf.cast(self.construct.step(x[0], x[1], False), tf.float64),
+                    # DONE: MAKE DIFFERENTIABLE! or some other solution
+                    # angle to meter fun
+                    red_pos_batch = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32),
                                               red_batch_angle_pred)
 
-                    # print(red_batch_angle_pred, grn_batch_train)
+                    # print(red_batch_angle_pred, red_pos_batch)
 
                     # print(self.net.trainable_variables)
 
@@ -94,7 +95,10 @@ class Agent:
                 for red_grn_batch_valid, grn_batch_valid in ds_valid:
                     red_batch_servo_angles = self.net(red_grn_batch_valid, training=False)
 
-                    loss = self.cost(red_batch_servo_angles, grn_batch_valid)
+                    red_batch_pos = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32),
+                                              red_batch_servo_angles)
+
+                    loss = self.cost(red_batch_pos, grn_batch_valid)
 
                     self.valid_loss_metric(loss)
 
@@ -104,14 +108,17 @@ class Agent:
         done_red = False
         i_red = 0
         while not done_red and i_red < 10:
-            done_red, red_pos = self.construct.step(inp[0], inp[1])
+            red_pos = self.construct.step(inp[0], inp[1])
             i_red += 1
-        input_angles = tf.expand_dims(tf.convert_to_tensor((*self.construct.red_pos, *self.construct.green_pos), dtype=tf.float64), 0)
+        input_angles = tf.expand_dims(tf.convert_to_tensor((*self.construct.red_pos, *self.construct.green_pos), dtype=tf.float32), 0)
         predicted_angles = self.net(input_angles, training=False)
 
         done_green = False
         i_green = 0
         while not done_green and i_green < 10:
-            done_green, green_pos = self.construct.step(predicted_angles[0, 0], predicted_angles[0, 1])
+            green_pos = self.construct.step(predicted_angles[0, 0], predicted_angles[0, 1])
+            i_green += 1
+
+        # TODO: return done argument form "construct.step!"
 
         self.wall.update(red_pos, green_pos)

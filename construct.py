@@ -3,6 +3,9 @@ import itertools
 import numpy as np
 from matplotlib import pyplot as plt
 
+from typing import Sequence
+
+import tensorflow as tf
 
 class Environment:
     """
@@ -15,7 +18,8 @@ class Environment:
     _lens_focal_length = (2.8, 12)  # mm
 
     def __init__(self):
-        pass
+        self.default_aov, self.default_fov = self.get_fov()
+        self.default_ppm = (self.get_ppm(self.default_fov[0], 0), self.get_ppm(self.default_fov[1], 1))
 
     def get_fov(self, c2w_distance=camera_to_wall_distance, focal_length=_lens_focal_length[0]):
         """ calculate camera fov based on camera to wall distance and lens adjusted focal length
@@ -34,7 +38,7 @@ class Environment:
         """
 
         :param fov: (float) field of view in meters
-        :param axis: (int) axis for which fov is calculated | Horizontal (0) | Vertical (1) |
+        :param axis: (int) axis for which ppm is calculated | Horizontal (0) | Vertical (1) |
         :return ppm: (float) pixels per meter
         """
 
@@ -52,7 +56,7 @@ class Environment:
         :param axis: (int) axis for which conversion is calculated | Horizontal (0) | Vertical (1) |
         :return pos_pixels: (int) position of laser point from center in [pixels]
         """
-        return int(np.round(self.camera_resolution[axis]/2 + ppm * pos_meters))
+        return self.camera_resolution[axis]/2 + ppm * pos_meters
 
     def pixel_to_meter(self, pos_pixels: int, ppm: float, axis: int):
         """
@@ -73,9 +77,9 @@ class Environment:
         :return meter_pos: (float) distance of laser point from "center" in meters
         """
         wall_dist = self.camera_to_wall_distance
-        alpha = np.deg2rad(angle_defaults[0] - angle)
-        beta = np.deg2rad(angle_defaults[1] - angle2)
-        return wall_dist*np.tan(alpha)/np.cos(beta)
+        alpha = (angle_defaults[0] - angle)/180*np.pi  # converted to rad
+        beta = (angle_defaults[1] - angle2)/180*np.pi  # converted to rad
+        return wall_dist*tf.tan(alpha)/tf.cos(beta)
 
     def meter_to_angle(self, dist_meters, angle2=90, angle_defaults=(90, 90)):
         """ convert meter position on wall to angle distance from _default_angle position ("center")
@@ -88,6 +92,34 @@ class Environment:
         wall_dist = self.camera_to_wall_distance  # [meters]
         beta = np.deg2rad(angle_defaults[1] - angle2)  # [radians]
         return int(np.round(angle_defaults[0] - np.rad2deg(np.arctan(dist_meters*np.cos(beta)/wall_dist))))
+
+    @tf.function
+    def angle_to_pixel(self, angles: Sequence[int], angle_defaults=(90, 90), ppm=(None, None)):
+        """
+        :param angles: Tuple[int] x and y angles of the servos for respective laser
+        :param angle_defaults: Tuple[int] default values for x and y angles of the servos
+
+        :return: Tuple[int]
+        """
+        assert len(angles) == 2, "angles must hold exactly 2 values"
+        assert len(angle_defaults) == 2, "angle defaults must hold exactly 2 values"
+
+#        _, fov = self.get_fov()
+        ppm = list(ppm)
+        if ppm[0] is None:
+            ppm[0] = self.default_ppm[0]
+        if ppm[1] is None:
+            ppm[1] = self.default_ppm[1]
+#        ppm_x = self.get_ppm(fov[0], axis=0)
+#        ppm_y = self.get_ppm(fov[1], axis=1)
+
+        m_x = self.angle_to_meter(angles[0], angles[1], angle_defaults)
+        m_y = self.angle_to_meter(angles[1], angles[0], angle_defaults[::-1])
+
+        pixel_x = self.meter_to_pixel(m_x, ppm[0], axis=0)
+        pixel_y = self.meter_to_pixel(m_y, ppm[1], axis=1)
+
+        return pixel_x, pixel_y
 
 
 class PathGenerator:
