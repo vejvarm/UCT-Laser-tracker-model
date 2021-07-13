@@ -1,4 +1,5 @@
 from abc import ABC
+from typing import Tuple
 
 import numpy as np
 import tensorflow as tf
@@ -42,17 +43,15 @@ class SimpleNN(keras.Model, ABC):
 
 class Agent:
 
-    def __init__(self, env, red_laser=None, green_laser=None, hidden_shape=20):
+    def __init__(self, env, construct, hidden_shape=20):
         self.env = env
-        self.construct = Construct((red_laser, green_laser))
+        self.construct = construct
 
         self.net = SimpleNN(hidden_shape)  # base shape TODO: change to be more versatile during init with more models
         self.opt = keras.optimizers.Adam
         self.loss = tf.losses.mean_squared_error
         self.loss_metric = keras.metrics.Mean()
         self.valid_loss_metric = keras.metrics.Mean()
-
-        self.wall = Wall(blit=True)
 
     @staticmethod
     def cost(red_batch, grn_batch):
@@ -104,21 +103,14 @@ class Agent:
 
                 print(f"ep: {ep} | validation mean_loss = {self.valid_loss_metric.result()}")
 
-    def predict(self, inp):
-        done_red = False
-        i_red = 0
-        while not done_red and i_red < 10:
-            red_pos = self.construct.step(inp[0], inp[1])
-            i_red += 1
-        input_angles = tf.expand_dims(tf.convert_to_tensor((*self.construct.red_pos, *self.construct.green_pos), dtype=tf.float32), 0)
-        predicted_angles = self.net(input_angles, training=False)
+    def predict(self, red_pos: Tuple[int], green_pos: Tuple[int]):
+        """
 
-        done_green = False
-        i_green = 0
-        while not done_green and i_green < 10:
-            green_pos = self.construct.step(predicted_angles[0, 0], predicted_angles[0, 1])
-            i_green += 1
+        :param red_pos: Tuple[int] current pixel position of red laser
+        :param green_pos: Tuple[int] current pixel position of the green laser
+        :return new_green_pos: Tuple[int] new pixel position of the green laser
+        """
+        inputs = tf.expand_dims(tf.convert_to_tensor((*red_pos, *green_pos), dtype=tf.float32), 0)
+        predicted_angles = self.net(inputs, training=False)
 
-        # TODO: return done argument form "construct.step!"
-
-        self.wall.update(red_pos, green_pos)
+        return predicted_angles
