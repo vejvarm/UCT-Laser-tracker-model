@@ -29,7 +29,7 @@ class SimpleNN(keras.Model, ABC):
         self.summary()
 
     @staticmethod
-    def float_to_angle_rescaler(x, low=20, high=160):
+    def float_to_angle_rescaler(x, low=60, high=120):
         """ TODO: don't access protected variables"""
         center = float(high + low)/2
         return center + x*float(center - low)
@@ -37,7 +37,8 @@ class SimpleNN(keras.Model, ABC):
     def call(self, inputs, **kwargs):
         x = self.relu(self.l1(inputs))
         x = self.relu(self.l2(x))
-        x = self.tanh(self.l3(x))
+        x = self.l3(x)
+        x = self.tanh(x)
         return self.float_to_angle_rescaler(x)  # values between (-90, 90) not rounded
 
 
@@ -54,28 +55,39 @@ class Agent:
         self.valid_loss_metric = keras.metrics.Mean()
 
     @staticmethod
-    def cost(red_batch, grn_batch):
+    def cost(pred_batch, target_batch):
         """ euclidean distance cost function """
-        return tf.sqrt(tf.square(red_batch[:, 0] - grn_batch[:, 0]) + tf.square(red_batch[:, 1] - grn_batch[:, 1]))
+        # print(f"red: {pred_batch}")
+        # print(f"grn: {target_batch}")
+        return tf.sqrt(tf.square(pred_batch[:, 0] - target_batch[:, 0]) + tf.square(pred_batch[:, 1] - target_batch[:, 1]))
+
+    def reward(self, red_batch, grn_batch):
+        return 1 - self.cost(red_batch, grn_batch)
 
     def train(self, ds_train, ds_valid=None, num_epochs=10, lr=0.001):
         optimizer = self.opt(lr)
+        grn_pos = [self.construct.green_pos]*5  # TODO: batch sizes
         for ep in range(num_epochs):
-            for step, (red_grn_batch_train, grn_batch_train) in enumerate(ds_train):
+            for step, (red_pos, grn_pos_target) in enumerate(ds_train):
                 with tf.GradientTape() as tape:
-                    red_batch_angle_pred = self.net(red_grn_batch_train, training=True)  # red laser angle prediction
+                    red_grn_pos = tf.concat((red_pos, grn_pos), axis=1)
+                    # TODO: normalize more globally (during data creation/feeding into net?)
+                    red_grn_pos = (red_grn_pos - self.env.camera_resolution[1]/2)/self.env.camera_resolution[1]
+                    grn_batch_angle_pred = self.net(red_grn_pos, training=True)  # red laser angle prediction
+                    # print(red_batch_angle_pred)
 
                     # DONE: MAKE DIFFERENTIABLE! or some other solution
                     # angle to meter fun
-                    red_pos_batch = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32),
-                                              red_batch_angle_pred)
+                    grn_pos = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32), grn_batch_angle_pred)
 
                     # print(red_batch_angle_pred, red_pos_batch)
 
                     # print(self.net.trainable_variables)
 
-                    # loss = self.loss(grn_batch_train, red_batch_angle_pred)  # [batch_size, 2]
-                    loss = self.cost(red_pos_batch, grn_batch_train)
+                    loss = self.cost(grn_pos, grn_pos_target)
+                    # print(grn_pos, grn_pos_target)
+                    # loss = self.loss(grn_pos, grn_pos_target)  # [batch_size, 2]
+
 
                     # tape.watch(loss)
                     # print(loss.shape)
@@ -83,21 +95,27 @@ class Agent:
                     # print([var.shape for var in tape.watched_variables()])
 
                 grads = tape.gradient(loss, self.net.trainable_variables)
+                grads, _ = tf.clip_by_global_norm(grads, 10.0)
+                #
                 optimizer.apply_gradients(zip(grads, self.net.trainable_variables))
 
                 self.loss_metric(loss)
 
                 if step % 100 == 0:
-                    print(f"ep: {ep} | step: {step} | mean_loss = {self.loss_metric.result()}")
+                    print(f"ep: {ep} | step: {step} | mean_loss = {self.loss_metric.result()} | grad = {tf.reduce_mean([tf.reduce_mean(g) for g in grads])}")
 
             if ds_valid and ep % 2 == 0:
-                for red_grn_batch_valid, grn_batch_valid in ds_valid:
-                    red_batch_servo_angles = self.net(red_grn_batch_valid, training=False)
+                for red_pos_valid, grn_target_valid in ds_valid:
+                    grn_pos_valid = [self.construct.green_pos] * len(red_pos_valid)
+                    red_grn_pos_valid = tf.concat((red_pos_valid, grn_pos_valid), axis=1)
+                    # TODO: normalize more globally
+                    red_grn_pos_valid = (red_grn_pos_valid - self.env.camera_resolution[1] / 2) / self.env.camera_resolution[1]
+                    grn_batch_servo_angles = self.net(red_grn_pos_valid, training=False)
 
-                    red_batch_pos = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32),
-                                              red_batch_servo_angles)
+                    grn_batch_pos = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32),
+                                              grn_batch_servo_angles)
 
-                    loss = self.cost(red_batch_pos, grn_batch_valid)
+                    loss = self.cost(grn_batch_pos, grn_target_valid)
 
                     self.valid_loss_metric(loss)
 
@@ -108,9 +126,11 @@ class Agent:
 
         :param red_pos: Tuple[int] current pixel position of red laser
         :param green_pos: Tuple[int] current pixel position of the green laser
-        :return new_green_pos: Tuple[int] new pixel position of the green laser
+        :return predicted_angles: Tuple[int] new angle position of the green laser servos
         """
         inputs = tf.expand_dims(tf.convert_to_tensor((*red_pos, *green_pos), dtype=tf.float32), 0)
+        # TODO: normalize more globally (during data creation/feeding into net?)
+        inputs = (inputs - self.env.camera_resolution[1] / 2) / self.env.camera_resolution[1]
         predicted_angles = self.net(inputs, training=False)
 
         return predicted_angles
