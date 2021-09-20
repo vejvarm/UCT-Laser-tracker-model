@@ -14,6 +14,7 @@ class Environment:
     _chip_size = (7.564, 5.476)  # (width, height) mm
     _crop_factor = 5.54
     _lens_focal_length = (2.8, 12)  # mm
+    _wall_diagonal_pixels = tf.sqrt(tf.reduce_sum(tf.square(tf.cast(camera_resolution, tf.float32))))
 
     def __init__(self):
         self.default_aov, self.default_fov = self.get_fov()
@@ -118,6 +119,17 @@ class Environment:
         pixel_y = self.meter_to_pixel(m_y, ppm[1], axis=1)
 
         return pixel_x, pixel_y
+
+    def cost(self, pred_batch, target_batch):
+        """ euclidean distance cost function """
+        # print(f"red: {pred_batch}")
+        # print(f"grn: {target_batch}")
+        return (tf.sqrt(tf.square(pred_batch[:, 0] - target_batch[:, 0])
+                        + tf.square(pred_batch[:, 1] - target_batch[:, 1]))
+                / self._wall_diagonal_pixels)
+
+    def reward(self, red_batch, grn_batch):
+        return 1. - self.cost(red_batch, grn_batch)
 
 
 class PathGenerator:

@@ -44,6 +44,12 @@ class SimpleNN(keras.Model, ABC):
 
 class Agent:
 
+    def __init__(self):
+        pass
+
+
+class SupervisedAgent:
+
     def __init__(self, env, construct, hidden_shape=20):
         self.env = env
         self.construct = construct
@@ -53,16 +59,6 @@ class Agent:
         self.loss = tf.losses.mean_squared_error
         self.loss_metric = keras.metrics.Mean()
         self.valid_loss_metric = keras.metrics.Mean()
-
-    @staticmethod
-    def cost(pred_batch, target_batch):
-        """ euclidean distance cost function """
-        # print(f"red: {pred_batch}")
-        # print(f"grn: {target_batch}")
-        return tf.sqrt(tf.square(pred_batch[:, 0] - target_batch[:, 0]) + tf.square(pred_batch[:, 1] - target_batch[:, 1]))
-
-    def reward(self, red_batch, grn_batch):
-        return 1 - self.cost(red_batch, grn_batch)
 
     def train(self, ds_train, ds_valid=None, num_epochs=10, lr=0.001):
         optimizer = self.opt(lr)
@@ -84,10 +80,9 @@ class Agent:
 
                     # print(self.net.trainable_variables)
 
-                    loss = self.cost(grn_pos, grn_pos_target)
+                    loss = self.env.cost(grn_pos, grn_pos_target)
                     # print(grn_pos, grn_pos_target)
                     # loss = self.loss(grn_pos, grn_pos_target)  # [batch_size, 2]
-
 
                     # tape.watch(loss)
                     # print(loss.shape)
@@ -115,7 +110,7 @@ class Agent:
                     grn_batch_pos = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32),
                                               grn_batch_servo_angles)
 
-                    loss = self.cost(grn_batch_pos, grn_target_valid)
+                    loss = self.env.cost(grn_batch_pos, grn_target_valid)
 
                     self.valid_loss_metric(loss)
 

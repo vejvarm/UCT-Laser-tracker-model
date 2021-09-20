@@ -3,7 +3,7 @@ import time
 import tensorflow as tf
 from numpy import random
 
-from agents import Agent
+from agents import SupervisedAgent
 from construct import Construct, Environment, PathGenerator, Wall
 
 tf.keras.backend.set_floatx('float32')
@@ -36,7 +36,7 @@ if __name__ == '__main__':
     pth_gen = PathGenerator()
     wall = Wall(blit=True)
 
-    agent = Agent(env, construct, hidden_shape=500)
+    agent = SupervisedAgent(env, construct, hidden_shape=500)
 
     x, y = pth_gen.ellipse(scale=0.5, circle=True, return_angles=False)
 
@@ -58,9 +58,9 @@ if __name__ == '__main__':
         time.sleep(0.01)
 
 
+# TODO: make reward function based on distance + efficienty of movement + punishment for not moving
 # TODO: enforce boundaries for agent to not go out of bounds of the working area (maybe also implement bigger punishment for doing so)
 # TODO: make parralelizable for multiagent training
-# TODO: make reward function based on distance + efficienty of movement + punishment for not moving
 # TODO: make framework for input type switch (either raw image data or laser positions)
 # TODO: implement training with regards to speed_restrictions=True
 # TODO: batch sizes

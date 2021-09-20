@@ -116,7 +116,7 @@ class Laser:
     def set_fov(self, fov: tuple):
         self.fov = fov
 
-    def move_x_y_tick(self, angle_x: int = None, angle_y: int = None, speed_restrictions=True):
+    def move_angle_tick(self, angle_x: int = None, angle_y: int = None, speed_restrictions=True):
         """ move servos to specific angle, with consideration of servo speed and update the current wall positions
 
         :param angle_x: (int) angle of servo moving along x (horizontal) axis (if None, keep last position)
@@ -204,17 +204,17 @@ class Construct:
 
         if green:
             # move green laser based on inputs/path from path_gen
-            done = self._laser_green.move_x_y_tick(x, y, speed_restrictions)
+            done = self._laser_green.move_angle_tick(x, y, speed_restrictions)
             # update green laser position
             self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
         else:
             # move red laser based on inputs/path from path_gen
-            done = self._laser_red.move_x_y_tick(x, y, speed_restrictions)
+            done = self._laser_red.move_angle_tick(x, y, speed_restrictions)
             # update red laser position
             self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
 
-            # DONE: reimplement the done indicator!
-            return (done, self.green_pos) if green else (done, self.red_pos)
+        # DONE: reimplement the done indicator!
+        return (done, self.green_pos) if green else (done, self.red_pos)
 
     def run(self, angles_x=None, angles_y=None):
         if angles_x is None:
