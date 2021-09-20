@@ -1,8 +1,89 @@
+from abc import ABC
+
+import numpy as np
+
+from collections import namedtuple
+
 from matplotlib import pyplot as plt
 
 from helpers import generate_path
 
 from environment import Environment, PathGenerator
+
+from tf_agents.environments import py_environment
+from tf_agents.specs import array_spec
+from tf_agents.trajectories import time_step as ts
+
+
+class LaserEnvironment(py_environment.PyEnvironment, ABC):
+
+    def __init__(self, lasers=(None, None), visualize=False, speed_restrictions=True):
+        self._action_spec = array_spec.BoundedArraySpec(
+            shape=(1, 2), dtype=np.float32, minimum=0, maximum=180, name='action')
+        self._observation_spec = array_spec.BoundedArraySpec(
+            shape=(4,), dtype=np.float32, minimum=0, name='observation')
+        self._observation = [0., 0., 0., 0.]
+        self._episode_ended = False
+        self.speed_restrictions = speed_restrictions
+
+        if lasers[0] is None:
+            self._laser_red = Laser()
+        else:
+            self._laser_red = lasers[0]
+        if lasers[1] is None:
+            self._laser_green = Laser()
+        else:
+            self._laser_green = lasers[1]
+
+        self.visualize = visualize
+
+        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+
+        if self.visualize:
+            self.wall = Wall(blit=True)
+        else:
+            self.wall = None
+
+        self.env = Environment()
+
+        self.default_path_x, self.default_path_y = generate_path()
+
+    def action_spec(self):
+        return self._action_spec
+
+    def observation_spec(self):
+        return self._observation_spec
+
+    def _reset(self):
+        self._state = 0
+        self._episode_ended = False
+        self.__init__()
+        return ts.restart(self._observation)
+
+    def _step(self, action):
+        x_red = next(self.default_path_x)
+        y_red = next(self.default_path_y)
+
+        # move green laser based on inputs/path from path_gen
+        _ = self._laser_green.move_angle_tick(action[0, 0], action[0, 1], self.speed_restrictions)
+        # move red laser based on path from path_gen
+        done = self._laser_red.move_angle_tick(x_red, y_red, self.speed_restrictions)
+
+        if self._episode_ended:
+            # The last action ended the episode. Ignore the current action and start
+            # a new episode.
+            return self.reset()
+
+        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+        self._observation = [*self.green_pos, *self.red_pos]
+
+        reward = self.env.reward(np.expand_dims(self._observation, 0))
+        if self._episode_ended:
+            return ts.termination(self._observation, reward)
+        else:
+            return ts.transition(self._observation, reward=reward, discount=1.0)
 
 
 class Servo:
@@ -165,7 +246,7 @@ class Construct:
     """
     __vertical_laser_distance = 0.2  # m
 
-    def __init__(self, lasers=(None, None), agent=None, visualize=False):
+    def __init__(self, lasers=(None, None), visualize=False):
         """
 
         :param lasers:
@@ -180,10 +261,10 @@ class Construct:
         else:
             self._laser_green = lasers[1]
 
-        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
-        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
-
         self.visualize = visualize
+
+        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
 
         if self.visualize:
             self.wall = Wall(blit=True)
@@ -192,55 +273,41 @@ class Construct:
 
         self.env = Environment()
 
-        self.agent = agent
-
         self.default_path_x, self.default_path_y = generate_path()
 
-    def step(self, x=None, y=None, green=False, speed_restrictions=True):
-        if x is None:
-            x = next(self.default_path_x)
-        if y is None:
-            y = next(self.default_path_y)
+        self.state = namedtuple("TimeStep", ("discount", "observation", "reward", "step_type", "done"))
+        self.state.discount = 1.
+        self.state.observation = np.array([self._laser_green.wall_pos_x, self._laser_green.wall_pos_y,
+                                           self._laser_red.wall_pos_x, self._laser_red.wall_pos_y])
+        self.state.reward = self.env.reward(np.expand_dims(self.state.observation, 0))
+        self.state.step_type = 0
+        self.state.done = False
 
-        if green:
-            # move green laser based on inputs/path from path_gen
-            done = self._laser_green.move_angle_tick(x, y, speed_restrictions)
-            # update green laser position
-            self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
-        else:
-            # move red laser based on inputs/path from path_gen
-            done = self._laser_red.move_angle_tick(x, y, speed_restrictions)
-            # update red laser position
-            self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+    def reset(self):
+        self.__init__()
+        return self.state
+
+    def step(self, x=None, y=None, speed_restrictions=True):
+        x_red = next(self.default_path_x)
+        y_red = next(self.default_path_y)
+
+        # move green laser based on inputs/path from path_gen
+        _ = self._laser_green.move_angle_tick(x, y, speed_restrictions)
+        # move red laser based on path from path_gen
+        done = self._laser_red.move_angle_tick(x_red, y_red, speed_restrictions)
+
+        # update laser position indicators
+        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
 
         # DONE: reimplement the done indicator!
-        return (done, self.green_pos) if green else (done, self.red_pos)
-
-    def run(self, angles_x=None, angles_y=None):
-        if angles_x is None:
-            angles_x = self.default_path_x
-        if angles_y is None:
-            angles_y = self.default_path_y
-
-        # __ for each tick __
-        for ax, ay in zip(angles_x, angles_y):
-            done_red = False
-            while not done_red:
-
-                # move and update red laser positions
-                done_red, red_pos = self.step(ax, ay)
-
-                if self.agent is not None:
-                    # move and update green laser based on agent decision
-                    grn_angle = self.agent.predict(red_pos, self.green_pos)
-                    done_grn, self.green_pos = self.step(grn_angle[0, 0], grn_angle[0, 1], speed_restrictions=False)
-                else:
-                    # update green laser position
-                    self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
-
-            # draw wall one tick (if visualize==True)
-            if self.visualize:
-                self.wall.update(self.red_pos, self.green_pos)  # TODO: allow for sparse updates!
+        # what we want to return: TimeStep({'discount', 'observation', 'reward', 'step_type'})
+        self.state.discount = 1.
+        self.state.observation = np.array([*self.green_pos, *self.red_pos])
+        self.state.reward = self.env.reward(np.expand_dims(self.state.observation, 0))
+        self.state.step_type = 0
+        self.state.done = done
+        return self.state
 
 
 class Wall:

@@ -120,16 +120,16 @@ class Environment:
 
         return pixel_x, pixel_y
 
-    def cost(self, pred_batch, target_batch):
+    def cost(self, observation):
         """ euclidean distance cost function """
         # print(f"red: {pred_batch}")
         # print(f"grn: {target_batch}")
-        return (tf.sqrt(tf.square(pred_batch[:, 0] - target_batch[:, 0])
-                        + tf.square(pred_batch[:, 1] - target_batch[:, 1]))
-                / self._wall_diagonal_pixels)
+        cost = tf.sqrt(tf.square(observation[:, 0] - observation[:, 2])
+                       + tf.square(observation[:, 1] - observation[:, 3]))
+        return tf.cast(cost, tf.float32) / self._wall_diagonal_pixels
 
-    def reward(self, red_batch, grn_batch):
-        return 1. - self.cost(red_batch, grn_batch)
+    def reward(self, observation):
+        return 1. - self.cost(observation)
 
 
 class PathGenerator:

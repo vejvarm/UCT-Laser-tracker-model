@@ -1,10 +1,12 @@
 import time
 
+import numpy as np
 import tensorflow as tf
 from numpy import random
 
 from agents import SupervisedAgent
-from construct import Construct, Environment, PathGenerator, Wall
+from construct import Construct, Environment, PathGenerator, Wall, LaserEnvironment
+from tf_agents.environments import tf_py_environment
 
 tf.keras.backend.set_floatx('float32')
 
@@ -30,7 +32,10 @@ def generate_random_data(env, num_train=10000, num_valid=100):
 
 
 if __name__ == '__main__':
-    construct = Construct(visualize=False)
+    # construct = Construct(visualize=False)
+    construct = LaserEnvironment(visualize=False, speed_restrictions=False)
+    # TODO: this env works but we need to check if we don't have some problem with training the net
+    # TODO: try to run with tf_agents
     # construct.run()
     env = Environment()
     pth_gen = PathGenerator()
@@ -38,21 +43,20 @@ if __name__ == '__main__':
 
     agent = SupervisedAgent(env, construct, hidden_shape=500)
 
-    x, y = pth_gen.ellipse(scale=0.5, circle=True, return_angles=False)
-
     ds_train, ds_valid = generate_random_data(env)
 
+    agent.train(ds_train, ds_valid=ds_valid, num_epochs=3, lr=0.001)
+
     inp_x, inp_y = pth_gen.ellipse(scale=0.5, circle=True, return_angles=True)
-
-    agent.train(ds_train, ds_valid=ds_valid, num_epochs=10, lr=0.001)
-
-    grn_pos = construct.green_pos
+    time_step = construct.reset()
     for ix, iy in zip(inp_x, inp_y):
-        _, red_pos = construct.step(ix, iy, speed_restrictions=False)
 
-        pred_angles = agent.predict(red_pos, grn_pos)
+        pred_angles = agent.predict(time_step.observation)
 
-        _, grn_pos = construct.step(pred_angles[0, 0], pred_angles[0, 1], speed_restrictions=False)
+        time_step = construct.step(pred_angles)
+
+        grn_pos = time_step.observation[0:2]
+        red_pos = time_step.observation[2:]
 
         wall.update(red_pos, grn_pos)
         time.sleep(0.01)

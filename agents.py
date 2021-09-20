@@ -66,10 +66,10 @@ class SupervisedAgent:
         for ep in range(num_epochs):
             for step, (red_pos, grn_pos_target) in enumerate(ds_train):
                 with tf.GradientTape() as tape:
-                    red_grn_pos = tf.concat((red_pos, grn_pos), axis=1)
+                    grn_red_pos = tf.concat((grn_pos, red_pos), axis=1)
                     # TODO: normalize more globally (during data creation/feeding into net?)
-                    red_grn_pos = (red_grn_pos - self.env.camera_resolution[1]/2)/self.env.camera_resolution[1]
-                    grn_batch_angle_pred = self.net(red_grn_pos, training=True)  # red laser angle prediction
+                    grn_red_pos = (grn_red_pos - self.env.camera_resolution[1]/2)/self.env.camera_resolution[1]
+                    grn_batch_angle_pred = self.net(grn_red_pos, training=True)  # green laser angle prediction
                     # print(red_batch_angle_pred)
 
                     # DONE: MAKE DIFFERENTIABLE! or some other solution
@@ -80,7 +80,7 @@ class SupervisedAgent:
 
                     # print(self.net.trainable_variables)
 
-                    loss = self.env.cost(grn_pos, grn_pos_target)
+                    loss = self.env.cost(tf.concat((grn_pos, red_pos), -1))
                     # print(grn_pos, grn_pos_target)
                     # loss = self.loss(grn_pos, grn_pos_target)  # [batch_size, 2]
 
@@ -102,30 +102,30 @@ class SupervisedAgent:
             if ds_valid and ep % 2 == 0:
                 for red_pos_valid, grn_target_valid in ds_valid:
                     grn_pos_valid = [self.construct.green_pos] * len(red_pos_valid)
-                    red_grn_pos_valid = tf.concat((red_pos_valid, grn_pos_valid), axis=1)
+                    grn_red_pos_valid = tf.concat((grn_pos_valid, red_pos_valid), axis=1)
                     # TODO: normalize more globally
-                    red_grn_pos_valid = (red_grn_pos_valid - self.env.camera_resolution[1] / 2) / self.env.camera_resolution[1]
-                    grn_batch_servo_angles = self.net(red_grn_pos_valid, training=False)
+                    grn_red_pos_valid = (grn_red_pos_valid - self.env.camera_resolution[1] / 2) / self.env.camera_resolution[1]
+                    grn_batch_servo_angles = self.net(grn_red_pos_valid, training=False)
 
                     grn_batch_pos = tf.map_fn(lambda x: tf.cast(self.env.angle_to_pixel(x), tf.float32),
                                               grn_batch_servo_angles)
 
-                    loss = self.env.cost(grn_batch_pos, grn_target_valid)
+                    loss = self.env.cost(tf.concat((grn_batch_pos, red_pos_valid), -1))
 
                     self.valid_loss_metric(loss)
 
                 print(f"ep: {ep} | validation mean_loss = {self.valid_loss_metric.result()}")
 
-    def predict(self, red_pos: Tuple[int], green_pos: Tuple[int]):
+    def predict(self, observation):
         """
 
-        :param red_pos: Tuple[int] current pixel position of red laser
-        :param green_pos: Tuple[int] current pixel position of the green laser
+        :param observation: Array[int] current pixel positions of green and red laser
         :return predicted_angles: Tuple[int] new angle position of the green laser servos
         """
-        inputs = tf.expand_dims(tf.convert_to_tensor((*red_pos, *green_pos), dtype=tf.float32), 0)
+        inputs = tf.expand_dims(observation, 0)
         # TODO: normalize more globally (during data creation/feeding into net?)
         inputs = (inputs - self.env.camera_resolution[1] / 2) / self.env.camera_resolution[1]
+        print(inputs)
         predicted_angles = self.net(inputs, training=False)
 
         return predicted_angles
