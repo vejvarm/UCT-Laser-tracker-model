@@ -2,7 +2,7 @@ import time
 import numpy as np
 import itertools
 
-from construct import Environment, Servo, Laser, Construct, Wall, PathGenerator
+from environment import Transformations, Servo, Laser, Construct, Wall, PathGenerator
 
 from matplotlib import pyplot as plt
 
@@ -32,7 +32,7 @@ if __name__ == '__main__':
     wall = Wall(blit=True)
     generator = np.random.default_rng()
     path_gen = PathGenerator()
-    env = Environment()
+    env = Transformations()
 
     row_angles = list(range(50, 131, 10))
     column_angles = np.array([[d]*len(row_angles) for d in row_angles]).flatten()

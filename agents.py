@@ -6,8 +6,6 @@ import tensorflow as tf
 
 from tensorflow import keras
 
-from construct import Construct, Servo, Wall
-
 
 class SimpleNN(keras.Model, ABC):
     """
@@ -125,7 +123,6 @@ class SupervisedAgent:
         inputs = tf.expand_dims(observation, 0)
         # TODO: normalize more globally (during data creation/feeding into net?)
         inputs = (inputs - self.env.camera_resolution[1] / 2) / self.env.camera_resolution[1]
-        print(inputs)
         predicted_angles = self.net(inputs, training=False)
 
         return predicted_angles

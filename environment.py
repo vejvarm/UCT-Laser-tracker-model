@@ -1,185 +1,296 @@
-import itertools
-from typing import Sequence
+from abc import ABC
 
-import tensorflow as tf
 import numpy as np
 
+from collections import namedtuple
 
-class Environment:
+from matplotlib import pyplot as plt
+
+from helpers import generate_path
+
+from transformations import Transformations
+
+from tf_agents.environments import py_environment
+from tf_agents.specs import array_spec
+from tf_agents.trajectories import time_step as ts
+
+
+class Servo:
     """
 
     """
-    camera_resolution = (4056, 3040)  # (width, height) px
-    camera_to_wall_distance = 4.  # m
-    _chip_size = (7.564, 5.476)  # (width, height) mm
-    _crop_factor = 5.54
-    _lens_focal_length = (2.8, 12)  # mm
-    _wall_diagonal_pixels = tf.sqrt(tf.reduce_sum(tf.square(tf.cast(camera_resolution, tf.float32))))
+    __speed = 10  # deg/tick
+    __slippage = 0  # deg (UNIMPLEMENTED)
+
+    _angle_bounds = (0, 180)  # degrees
+    _default_angle = 90  # degrees
 
     def __init__(self):
-        self.default_aov, self.default_fov = self.get_fov()
-        self.default_ppm = (self.get_ppm(self.default_fov[0], 0), self.get_ppm(self.default_fov[1], 1))
+        self._angle = self._default_angle
+        self.e = Transformations()
 
-    def get_fov(self, c2w_distance=camera_to_wall_distance, focal_length=_lens_focal_length[0]):
-        """ calculate camera fov based on camera to wall distance and lens adjusted focal length
+    # noinspection PyMethodParameters
+    def __enforce_bounds(foo):
+        # this is obviously a decorator (go home PyCharm, you drunk)
+        def wrap(self, angle, *args, **kwargs):
+            angle = max(min(angle, self._angle_bounds[1]), self._angle_bounds[0])
+            out = foo(self, angle, *args, **kwargs)
+            return out
 
-        :param c2w_distance: (float) distance from camera to projection wall in [m]
-        :param focal_length: (float) lens focal length in [mm] (not adjusted to crop factor)
-        :return aov, fov: Tuple[float], Tuple[float] Width x Height angle of view [deg] and field of view of the camera [m]
+        return wrap
+
+    def get_settings(self):
+        return self._angle_bounds, self._default_angle, self.__speed, self.__slippage
+
+    def get_angle(self):
+        return self._angle
+
+    def get_default_angle(self):
+        return self._default_angle
+
+    @__enforce_bounds
+    def set_angle(self, angle):
+        self._angle = angle
+
+    @__enforce_bounds
+    def set_default_angle(self, angle):
+        self._default_angle = angle
+
+    @__enforce_bounds
+    def move_to(self, angle):
+        if angle == self._angle:
+            pass
+        elif angle < self._angle:
+            self._angle = max(self._angle - self.__speed, angle)
+        else:
+            self._angle = min(self._angle + self.__speed, angle)
+
+    @__enforce_bounds
+    def get_dot_wall_position(self, angle, fov, axis=0, angle2=90, angle2_default=90):
+        """ calculate position of laser dot on wall based on goniometric functions
+        and angles of the servo
+
+        :param angle: (int) angle of servo which is perpendicular to wall [degrees]
+        :param fov: (float) field of view of the camera for the given axis [meters]
+        :param axis: (int) either horizontal (0) or vertical (1) axis
+        :param angle2: (int) angle of the secondary axis (if 0, it has no effect) [degrees]
+        :param angle2_default: (int) default angle of the secondary axis [degrees]
+        :return position: Tuple[int] position of dot [pixels]
         """
+        pos_meters = self.e.angle_to_meter(angle, angle2, (self._default_angle, angle2_default))
 
-        aov = [2*np.arctan(s/(2*focal_length)) for s in self._chip_size]  # angle of view (rad)
-        fov = [2*c2w_distance*np.tan(a/2) for a in aov]  # field of view
+        ppm = self.e.get_ppm(fov, axis)  # pixels per meter
 
-        return tuple(np.rad2deg(aov)), tuple(fov)
+        pos_pixels = self.e.meter_to_pixel(pos_meters, ppm, axis)
 
-    def get_ppm(self, fov: float, axis=0):
+        return pos_pixels
+        # DONE: TEST if correct! convert to pixel equivalent with given camera resolution
+        # TODO: Ensure boundaries
+
+
+class Laser:
+    """
+
+    """
+    def __init__(self, env=Transformations(), servos=(None, None)):
+        self._env = env
+
+        if servos[0] is None:
+            self._servo_x = Servo()
+        else:
+            self._servo_x = servos[0]
+        if servos[1] is None:
+            self._servo_y = Servo()
+        else:
+            self._servo_y = servos[1]
+
+        self.default_angle_x = self._servo_x.get_default_angle()
+        self.default_angle_y = self._servo_y.get_default_angle()
+
+        self.angle_x = self._servo_x.get_angle()
+        self.angle_y = self._servo_y.get_angle()
+
+        self.aov, self.fov = self._env.get_fov()  # (x, y) [deg], (x, y) [m]
+
+        self.wall_pos_x = self._servo_x.get_dot_wall_position(self.angle_x,
+                                                              self.fov[0],
+                                                              axis=0,
+                                                              angle2=self.angle_y,
+                                                              angle2_default=self.default_angle_y)
+        self.wall_pos_y = self._servo_y.get_dot_wall_position(self.angle_y,
+                                                              self.fov[1],
+                                                              axis=1,
+                                                              angle2=self.angle_x,
+                                                              angle2_default=self.default_angle_x)
+
+    def set_fov(self, fov: tuple):
+        self.fov = fov
+
+    def move_angle_tick(self, angle_x: int = None, angle_y: int = None, speed_restrictions=True):
+        """ move servos to specific angle, with consideration of servo speed and update the current wall positions
+
+        :param angle_x: (int) angle of servo moving along x (horizontal) axis (if None, keep last position)
+        :param angle_y: (int) angle of servo moving along y (vertical) axis
+        :param speed_restrictions: (bool) if False, angle increments are not restricted by servo speed
         """
+        if angle_x is None:
+            angle_x = self.angle_x
+        if angle_y is None:
+            angle_y = self.angle_y
 
-        :param fov: (float) field of view in meters
-        :param axis: (int) axis for which ppm is calculated | Horizontal (0) | Vertical (1) |
-        :return ppm: (float) pixels per meter
-        """
+        if speed_restrictions:
+            self._servo_x.move_to(angle_x)
+            self._servo_y.move_to(angle_y)
+        else:
+            self._servo_x.set_angle(angle_x)
+            self._servo_y.set_angle(angle_y)
 
-        resolution = self.camera_resolution[int(axis)]
+        self.default_angle_x = self._servo_x.get_default_angle()
+        self.default_angle_y = self._servo_y.get_default_angle()
 
-        ppm = resolution/fov
+        self.angle_x = self._servo_x.get_angle()
+        self.angle_y = self._servo_y.get_angle()
 
-        return ppm
+        # update wall positions
+        self.wall_pos_x = self._servo_x.get_dot_wall_position(self.angle_x,
+                                                              self.fov[0],
+                                                              axis=0,
+                                                              angle2=self.angle_y,
+                                                              angle2_default=self.default_angle_y)
+        self.wall_pos_y = self._servo_y.get_dot_wall_position(self.angle_y,
+                                                              self.fov[1],
+                                                              axis=1,
+                                                              angle2=self.angle_x,
+                                                              angle2_default=self.default_angle_x)
 
-    def meter_to_pixel(self, pos_meters: float, ppm: float, axis: int):
-        """
-
-        :param pos_meters: (float) position of laser point from center in [meters]
-        :param ppm: (float) number of pixels per one meter
-        :param axis: (int) axis for which conversion is calculated | Horizontal (0) | Vertical (1) |
-        :return pos_pixels: (int) position of laser point from center in [pixels]
-        """
-        return self.camera_resolution[axis]/2 + ppm * pos_meters
-
-    def pixel_to_meter(self, pos_pixels: int, ppm: float, axis: int):
-        """
-
-        :param pos_pixels: (int) position of laser point from center in [pixels]
-        :param ppm: (float) number of pixels per one meter
-        :param axis: (int) axis for which conversion is calculated | Horizontal (0) | Vertical (1) |
-        :return pos_meters: (float) position of laser point from center in [meters]
-        """
-        return (pos_pixels-self.camera_resolution[axis]/2)/ppm
-
-    def angle_to_meter(self, angle, angle2=90, angle_defaults=(90, 90)):
-        """ convert servo angle to meter distance from _default_angle position ("center")
-
-        :param angle: (int) current angle of the servo
-        :param angle2: (int) angle of the secondary axis (if 90, it has no effect) [degrees]
-        :param angle_defaults: (Tuple[int]) default angles of both axes [degrees]
-        :return meter_pos: (float) distance of laser point from "center" in meters
-        """
-        wall_dist = self.camera_to_wall_distance
-        alpha = (angle_defaults[0] - angle)/180*np.pi  # converted to rad
-        beta = (angle_defaults[1] - angle2)/180*np.pi  # converted to rad
-        return wall_dist*tf.tan(alpha)/tf.cos(beta)
-
-    def meter_to_angle(self, dist_meters, angle2=90, angle_defaults=(90, 90)):
-        """ convert meter position on wall to angle distance from _default_angle position ("center")
-
-        :param dist_meters: (float) distance of laser point from "center" in meters
-        :param angle2: (int) angle of the secondary axis (if 90, it has no effect) [degrees]
-        :param angle_defaults: (Tuple[int]) default angles of both axes [degrees]
-        :return angle: (int) respective angle of the servo
-        """
-        wall_dist = self.camera_to_wall_distance  # [meters]
-        beta = np.deg2rad(angle_defaults[1] - angle2)  # [radians]
-        return int(np.round(angle_defaults[0] - np.rad2deg(np.arctan(dist_meters*np.cos(beta)/wall_dist))))
-
-    @tf.function
-    def angle_to_pixel(self, angles: Sequence[int], angle_defaults=(90, 90), ppm=(None, None)):
-        """
-        :param angles: Tuple[int] x and y angles of the servos for respective laser
-        :param angle_defaults: Tuple[int] default values for x and y angles of the servos
-
-        :return: Tuple[int]
-        """
-        assert len(angles) == 2, "angles must hold exactly 2 values"
-        assert len(angle_defaults) == 2, "angle defaults must hold exactly 2 values"
-
-#        _, fov = self.get_fov()
-        ppm = list(ppm)
-        if ppm[0] is None:
-            ppm[0] = self.default_ppm[0]
-        if ppm[1] is None:
-            ppm[1] = self.default_ppm[1]
-#        ppm_x = self.get_ppm(fov[0], axis=0)
-#        ppm_y = self.get_ppm(fov[1], axis=1)
-
-        m_x = self.angle_to_meter(angles[0], angles[1], angle_defaults)
-        m_y = self.angle_to_meter(angles[1], angles[0], angle_defaults[::-1])
-
-        pixel_x = self.meter_to_pixel(m_x, ppm[0], axis=0)
-        pixel_y = self.meter_to_pixel(m_y, ppm[1], axis=1)
-
-        return pixel_x, pixel_y
-
-    def cost(self, observation):
-        """ euclidean distance cost function """
-        # print(f"red: {pred_batch}")
-        # print(f"grn: {target_batch}")
-        cost = tf.sqrt(tf.square(observation[:, 0] - observation[:, 2])
-                       + tf.square(observation[:, 1] - observation[:, 3]))
-        return tf.cast(cost, tf.float32) / self._wall_diagonal_pixels
-
-    def reward(self, observation):
-        return 1. - self.cost(observation)
+        if angle_x == self.angle_x and angle_y == self.angle_y:
+            return True
+        else:
+            return False
 
 
-class PathGenerator:
+class LaserTracker(py_environment.PyEnvironment, ABC):
 
-    def __init__(self, resolution=Environment.camera_resolution):
-        self.env = Environment()
+    def __init__(self, lasers=(None, None), visualize=False, speed_restrictions=True):
+        super().__init__()
+        self._action_spec = array_spec.BoundedArraySpec(
+            shape=(1, 2), dtype=np.float32, minimum=0, maximum=180, name='action')
+        self._observation_spec = array_spec.BoundedArraySpec(
+            shape=(4,), dtype=np.float32, minimum=0, name='observation')
+        self._observation = np.zeros(shape=4, dtype=np.float32)
+        self._episode_ended = False
+        self.speed_restrictions = speed_restrictions
+
+        if lasers[0] is None:
+            self._laser_red = Laser()
+        else:
+            self._laser_red = lasers[0]
+        if lasers[1] is None:
+            self._laser_green = Laser()
+        else:
+            self._laser_green = lasers[1]
+
+        self.visualize = visualize
+
+        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+
+        if self.visualize:
+            self.wall = Wall(blit=True)
+        else:
+            self.wall = None
+
+        self.env = Transformations()
+
+        self.default_path_x, self.default_path_y = generate_path()
+
+    def action_spec(self):
+        return self._action_spec
+
+    def observation_spec(self):
+        return self._observation_spec
+
+    def _reset(self):
+        self._observation = np.zeros(shape=4, dtype=np.float32)
+        self._episode_ended = False
+        return ts.restart(self._observation)
+
+    def _step(self, action):
+        x_red = next(self.default_path_x)
+        y_red = next(self.default_path_y)
+
+        # move green laser based on inputs/path from path_gen
+        _ = self._laser_green.move_angle_tick(action[0, 0], action[0, 1], self.speed_restrictions)
+
+        if self._episode_ended:
+            # The last action ended the episode. Ignore the current action and start
+            # a new episode.
+            return self.reset()
+
+        self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+        self._observation = [*self.green_pos, *self.red_pos]
+
+        # move red laser based on path from path_gen
+        done = self._laser_red.move_angle_tick(x_red, y_red, self.speed_restrictions)
+
+        reward = self.env.reward(np.expand_dims(self._observation, 0))
+        if self._episode_ended:
+            return ts.termination(self._observation, reward)
+        else:
+            return ts.transition(self._observation, reward=reward, discount=1.0)
+
+
+class Wall:
+    """
+
+    """
+
+    def __init__(self, resolution=Transformations.camera_resolution, blit=False):
         self.resolution = resolution
+        self.blit = blit
+        self.fig, self.ax = plt.subplots()
 
-    def ellipse(self, scale=0.5, resolution=0.1*np.pi, circle=False, return_angles=False):
-        """ generate pixel or servo angle points, which result in elliptical shape
+        self.ax.set_xlim([0, self.resolution[0]])
+        self.ax.set_ylim([0, self.resolution[1]])
 
-        :param scale: (float) [0 to 1] size of the shape with respect to the size of working area
-        :param resolution: (float) period (distance) of points in the shape
-        :param circle: (bool) if True, calculate shape to be a circle | else it's an ellipse
-        :param return_angles: if True, return angles of servos | else return pixel positions
-        :return pixel positions/angles of ellipse/circle points
-        """
         center = [r//2 for r in self.resolution]
-        radius = [(r - c)*scale for r, c in zip(self.resolution, center)]
 
-        alpha = np.arange(0, 2*np.pi, resolution)
+        self.stm_red = self.ax.stem([center[0]], [center[1]], linefmt="none", markerfmt="rx", basefmt="none")
+        self.stm_grn = self.ax.stem([center[0]], [center[1]], linefmt="none", markerfmt="go", basefmt="none")
 
-        if circle:
-            radius = [min(radius)]*2  # pick smaller radius to make a circle
+        self.fig.canvas.draw()
 
-        x = center[0] + radius[0]*np.cos(alpha)
-        y = center[1] + radius[1]*np.sin(alpha)
+        if self.blit:
+            # cache the background
+            self.bcgrd = self.fig.canvas.copy_from_bbox(self.ax.bbox)
 
-        if return_angles:
-            x, y = self._generate_ellipse_angles(x, y)
+        plt.show(block=False)
 
-        return itertools.cycle(x), itertools.cycle(y)
+    def update(self, red_pos=(0, 0), grn_pos=(0, 0)):
+        """ one step of wall update to show current position of lasers
 
-    def _generate_ellipse_angles(self, xs, ys):
-        # convert pixel path to servo angles
-        aov, fov = self.env.get_fov()
-        ppm_x = self.env.get_ppm(fov[1], axis=1)
-        ppm_y = self.env.get_ppm(fov[0], axis=0)
+        :param red_pos: Tuple[int] x and y position of the red laser
+        :param grn_pos: Tuple[ind] x and y position of the green laser
+        """
+        # set new data
+        if 0 < red_pos[0] < self.resolution[0] and 0 < red_pos[1] < self.resolution[1]:
+            self.stm_red.markerline.set_data(red_pos[0], red_pos[1])
+        if 0 < grn_pos[0] < self.resolution[0] and 0 < grn_pos[1] < self.resolution[1]:
+            self.stm_grn.markerline.set_data(grn_pos[0], grn_pos[1])
 
-        xas, yas = list(), list()
-        ya = 90
-        for x, y in zip(xs, ys):
-            xm = self.env.pixel_to_meter(x, ppm_x, axis=0)
-            ym = self.env.pixel_to_meter(y, ppm_y, axis=1)
-            xa = self.env.meter_to_angle(xm, ya)
-            ya = self.env.meter_to_angle(ym, xa)
-            xas.append(xa)
-            yas.append(ya)
+        if self.blit:
+            # restore background
+            self.fig.canvas.restore_region(self.bcgrd)
 
-        return xas, yas
+            # draw artists
+            self.ax.draw_artist(self.stm_red.markerline)
+            self.ax.draw_artist(self.stm_grn.markerline)
 
-        # DONE: calculate points of a circle (goniometry)
-        # DONE: make function for pixel->angle / angle->pixel position conversion
+            # fill in the axes rectangle
+            self.fig.canvas.blit(self.ax.bbox)
+        else:
+            self.fig.canvas.draw()
+
+        self.fig.canvas.flush_events()
+
