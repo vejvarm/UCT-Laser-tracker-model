@@ -6,6 +6,8 @@ from numpy import random
 from agents import SupervisedAgent
 from construct import Construct, Environment, PathGenerator, Wall
 
+from matplotlib import pyplot as plt
+
 tf.keras.backend.set_floatx('float32')
 
 
@@ -42,12 +44,12 @@ if __name__ == '__main__':
 
     ds_train, ds_valid = generate_random_data(env)
 
-    inp_x, inp_y = pth_gen.ellipse(scale=0.5, circle=True, return_angles=True)
+    inp_x, inp_y = pth_gen.ellipse(scale=0.7, circle=True, return_angles=True)
 
-    agent.train(ds_train, ds_valid=ds_valid, num_epochs=10, lr=0.001)
+    agent.train(ds_train, ds_valid=ds_valid, num_epochs=25, lr=0.001)
 
     grn_pos = construct.green_pos
-    for ix, iy in zip(inp_x, inp_y):
+    for i, (ix, iy) in enumerate(zip(inp_x, inp_y)):
         _, red_pos = construct.step(ix, iy, speed_restrictions=False)
 
         pred_angles = agent.predict(red_pos, grn_pos)
@@ -56,6 +58,7 @@ if __name__ == '__main__':
 
         wall.update(red_pos, grn_pos)
         time.sleep(0.01)
+        # plt.savefig(f"./images/{i:04d}.png")
 
 
 # TODO: make reward function based on distance + efficienty of movement + punishment for not moving
