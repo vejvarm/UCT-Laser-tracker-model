@@ -18,7 +18,9 @@ from tf_agents.agents.reinforce import reinforce_agent
 from tf_agents.replay_buffers import tf_uniform_replay_buffer
 from tf_agents.drivers import py_driver
 from tf_agents.policies import py_tf_eager_policy
-from tf_agents.drivers import dynamic_step_driver
+from tf_agents.drivers import dynamic_step_driver, dynamic_episode_driver
+
+from tensorflow.keras import metrics
 
 tf.keras.backend.set_floatx('float32')
 
@@ -103,13 +105,14 @@ def run_rl_agent():
 
 if __name__ == '__main__':
     # 00 HYPERPARAMS
+    num_runs = 10
     num_iterations = 50  # @param {type:"integer"}
-    collect_steps_per_iteration = 10  # @param {type:"integer"}
-    replay_buffer_capacity = 2000  # @param {type:"integer"}
+    collect_episodes_per_iteration = 10  # @param {type:"integer"}
+    replay_buffer_capacity = 500  # @param {type:"integer"}
 
-    fc_layer_params = (100,)
+    fc_layer_params = (256, 128, 64)
 
-    learning_rate = 1e-3  # @param {type:"number"}
+    learning_rate = 1e-5  # @param {type:"number"}
     log_interval = 25  # @param {type:"integer"}
     num_eval_episodes = 10  # @param {type:"integer"}
     eval_interval = 50  # @param {type:"integer"}
@@ -169,30 +172,35 @@ if __name__ == '__main__':
 
     print(replay_observer)
 
-    driver = dynamic_step_driver.DynamicStepDriver(train_env,
-                                                   tf_agent.collect_policy,
-                                                   observers=replay_observer,
-                                                   num_steps=collect_steps_per_iteration)
+    driver = dynamic_episode_driver.DynamicEpisodeDriver(train_env,
+                                                         tf_agent.collect_policy,
+                                                         observers=replay_observer,
+                                                         num_episodes=collect_episodes_per_iteration)
+    # DONE: This is never gonna end, because we have to define WHEN is the END of the EPISODE
 
-    print(driver)
+    loss_mean = metrics.Mean()
+    for _ in range(num_runs):
 
-    final_time_step, policy_state = driver.run()  # TODO: there is a problem with shapes!
+        final_time_step, policy_state = driver.run()  # DONE: there is a problem with shapes!
 
-    # Read the replay buffer as a Dataset,
-    # read batches of 4 elements, each with 2 timesteps:
-    dataset = replay_buffer.as_dataset(
-        sample_batch_size=4,
-        num_steps=2)
+        # Read the replay buffer as a Dataset,
+        # read batches of 4 elements, each with 50 timesteps:
+        dataset = replay_buffer.as_dataset(
+            sample_batch_size=5,
+            num_steps=num_iterations)  # must be same as steps_per_ep in LaserTracker env!
 
-    iterator = iter(dataset)
-    for _ in range(num_iterations):
-        trajectories, _ = next(iterator)
-        print(trajectories)
-        loss = tf_agent.train(experience=trajectories)
-        print(loss)
+        loss_mean.reset_state()
+        for _ in range(num_iterations):
+            iterator = iter(dataset)
+            trajectories, _ = next(iterator)
+            # print(trajectories)
+            loss = tf_agent.train(experience=trajectories)
+            loss_mean.update_state(loss.loss)
+        print(loss_mean.result())
 
 
-# TODO: REINFORCE requires full episodes to compute losses.
+# DONE: REINFORCE requires full episodes to compute losses.
+# TODO: How not to instantly explode into 0,180 angle bounds?
 # TODO: make reward function based on distance + efficienty of movement + punishment for not moving
 # TODO: enforce boundaries for agent to not go out of bounds of the working area (maybe also implement bigger punishment for doing so)
 # TODO: make parralelizable for multiagent training

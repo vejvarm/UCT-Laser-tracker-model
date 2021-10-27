@@ -171,15 +171,19 @@ class Laser:
 
 class LaserTracker(py_environment.PyEnvironment, ABC):
 
-    def __init__(self, lasers=(None, None), visualize=False, speed_restrictions=True):
+    def __init__(self, lasers=(None, None), visualize=False, speed_restrictions=True, steps_per_ep=50):
         super().__init__()
+        self.env = Transformations()
+
         self._action_spec = array_spec.BoundedArraySpec(
             shape=(2, ), dtype=np.float32, minimum=0, maximum=180, name='action')
         self._observation_spec = array_spec.BoundedArraySpec(
-            shape=(4,), dtype=np.float32, minimum=0, name='observation')
+            shape=(4,), dtype=np.float32, minimum=0, maximum=self.env.camera_resolution[0], name='observation')
         self._observation = np.zeros(shape=4, dtype=np.float32)
         self._episode_ended = False
         self.speed_restrictions = speed_restrictions
+        self._steps_per_ep = steps_per_ep
+        self._step_counter = 0
 
         if lasers[0] is None:
             self._laser_red = Laser()
@@ -200,8 +204,6 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
         else:
             self.wall = None
 
-        self.env = Transformations()
-
         self.default_path_x, self.default_path_y = generate_path()
 
     def action_spec(self):
@@ -212,20 +214,24 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
 
     def _reset(self):
         self._observation = np.zeros(shape=4, dtype=np.float32)
+        self._step_counter = 0
         self._episode_ended = False
         return ts.restart(self._observation)
 
     def _step(self, action):
-        x_red = next(self.default_path_x)
-        y_red = next(self.default_path_y)
-
-        # move green laser based on inputs/path from path_gen
-        _ = self._laser_green.move_angle_tick(action[0], action[1], self.speed_restrictions)
+        self._step_counter += 1
 
         if self._episode_ended:
             # The last action ended the episode. Ignore the current action and start
             # a new episode.
             return self.reset()
+
+        x_red = next(self.default_path_x)
+        y_red = next(self.default_path_y)
+
+        # move green laser based on agent inputs
+        _ = self._laser_green.move_angle_tick(action[0], action[1], self.speed_restrictions)
+        print(action)
 
         self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
         self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
@@ -234,7 +240,12 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
         # move red laser based on path from path_gen
         done = self._laser_red.move_angle_tick(x_red, y_red, self.speed_restrictions)
 
+        # End episode after self._steps_per_ep
+        if self._step_counter >= self._steps_per_ep:
+            self._episode_ended = True
+
         reward = self.env.reward(np.expand_dims(self._observation, 0))
+        reward = -1e10 if reward == -np.inf else reward  # TODO: find other way to normalize reward and remove -inf
         if self._episode_ended:
             return ts.termination(self._observation, reward)
         else:
