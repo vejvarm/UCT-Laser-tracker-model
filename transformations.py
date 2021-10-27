@@ -126,7 +126,7 @@ class Transformations:
         # print(f"grn: {target_batch}")
         cost = tf.sqrt(tf.square(observation[:, 0] - observation[:, 2])
                        + tf.square(observation[:, 1] - observation[:, 3]))
-        return tf.cast(cost, tf.float32) / self._wall_diagonal_pixels
+        return tf.squeeze(tf.cast(cost, tf.float32) / self._wall_diagonal_pixels)
 
     def reward(self, observation):
         return 1. - self.cost(observation)

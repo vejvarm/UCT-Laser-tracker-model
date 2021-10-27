@@ -174,7 +174,7 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
     def __init__(self, lasers=(None, None), visualize=False, speed_restrictions=True):
         super().__init__()
         self._action_spec = array_spec.BoundedArraySpec(
-            shape=(1, 2), dtype=np.float32, minimum=0, maximum=180, name='action')
+            shape=(2, ), dtype=np.float32, minimum=0, maximum=180, name='action')
         self._observation_spec = array_spec.BoundedArraySpec(
             shape=(4,), dtype=np.float32, minimum=0, name='observation')
         self._observation = np.zeros(shape=4, dtype=np.float32)
@@ -220,7 +220,7 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
         y_red = next(self.default_path_y)
 
         # move green laser based on inputs/path from path_gen
-        _ = self._laser_green.move_angle_tick(action[0, 0], action[0, 1], self.speed_restrictions)
+        _ = self._laser_green.move_angle_tick(action[0], action[1], self.speed_restrictions)
 
         if self._episode_ended:
             # The last action ended the episode. Ignore the current action and start
@@ -229,7 +229,7 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
 
         self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
         self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
-        self._observation = [*self.green_pos, *self.red_pos]
+        self._observation[:] = [*self.green_pos, *self.red_pos]  # DONE: There was a problem with dtype being float64!
 
         # move red laser based on path from path_gen
         done = self._laser_red.move_angle_tick(x_red, y_red, self.speed_restrictions)

@@ -18,7 +18,7 @@ from tf_agents.agents.reinforce import reinforce_agent
 from tf_agents.replay_buffers import tf_uniform_replay_buffer
 from tf_agents.drivers import py_driver
 from tf_agents.policies import py_tf_eager_policy
-from tf_agents.drivers import dynamic_episode_driver
+from tf_agents.drivers import dynamic_step_driver
 
 tf.keras.backend.set_floatx('float32')
 
@@ -104,7 +104,7 @@ def run_rl_agent():
 if __name__ == '__main__':
     # 00 HYPERPARAMS
     num_iterations = 50  # @param {type:"integer"}
-    collect_episodes_per_iteration = 2  # @param {type:"integer"}
+    collect_steps_per_iteration = 10  # @param {type:"integer"}
     replay_buffer_capacity = 2000  # @param {type:"integer"}
 
     fc_layer_params = (100,)
@@ -131,8 +131,8 @@ if __name__ == '__main__':
 
     # 02 THE AGENT
     actor_net = actor_distribution_network.ActorDistributionNetwork(
-        train_env.observation_spec(),  # BoundedArraySpec(shape=(4,), dtype=dtype('float32'), name='observation', minimum=[-4.8000002e+00 -3.4028235e+38 -4.1887903e-01 -3.4028235e+38], maximum=[4.8000002e+00 3.4028235e+38 4.1887903e-01 3.4028235e+38])
-        train_env.action_spec(),       # BoundedArraySpec(shape=(), dtype=dtype('int64'), name='action', minimum=0, maximum=1)
+        train_env.observation_spec(),  # BoundedArraySpec(shape=(4, ), dtype=dtype('float32'), name='observation', minimum=[-4.8000002e+00 -3.4028235e+38 -4.1887903e-01 -3.4028235e+38], maximum=[4.8000002e+00 3.4028235e+38 4.1887903e-01 3.4028235e+38])
+        train_env.action_spec(),       # BoundedArraySpec(shape=(2, ), dtype=dtype('float32'), name='action', minimum=0, maximum=180)
         fc_layer_params=fc_layer_params
     )
 
@@ -167,10 +167,12 @@ if __name__ == '__main__':
     # Add an observer that adds to the replay buffer:
     replay_observer = [replay_buffer.add_batch]
 
-    driver = dynamic_episode_driver.DynamicEpisodeDriver(train_env,
-                                                         tf_agent.collect_policy,
-                                                         observers=replay_observer,
-                                                         num_episodes=collect_episodes_per_iteration)
+    print(replay_observer)
+
+    driver = dynamic_step_driver.DynamicStepDriver(train_env,
+                                                   tf_agent.collect_policy,
+                                                   observers=replay_observer,
+                                                   num_steps=collect_steps_per_iteration)
 
     print(driver)
 
@@ -190,6 +192,7 @@ if __name__ == '__main__':
         print(loss)
 
 
+# TODO: REINFORCE requires full episodes to compute losses.
 # TODO: make reward function based on distance + efficienty of movement + punishment for not moving
 # TODO: enforce boundaries for agent to not go out of bounds of the working area (maybe also implement bigger punishment for doing so)
 # TODO: make parralelizable for multiagent training
