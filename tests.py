@@ -2,11 +2,11 @@ import time
 import unittest
 import numpy as np
 
-from construct import Environment, Servo, Laser, Construct, Wall
+from environment import Transformations, Servo, Laser, Construct, Wall
 
 
 class TestEnvironment(unittest.TestCase):
-    env = Environment()
+    env = Transformations()
     aov, fov = env.get_fov()
 
     def test_get_fov(self):
