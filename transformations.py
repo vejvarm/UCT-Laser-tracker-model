@@ -120,23 +120,85 @@ class Transformations:
 
         return pixel_x, pixel_y
 
-    def cost(self, observation):
-        """ euclidean distance cost function """
+    def normalize_obs(self, obs):
+        obs[0] /= self.camera_resolution[0]
+        obs[2] /= self.camera_resolution[0]
+        obs[1] /= self.camera_resolution[1]
+        obs[3] /= self.camera_resolution[1]
+        return obs
+
+    def denormalize_obs(self, norm_obs):
+        norm_obs[0] *= self.camera_resolution[0]
+        norm_obs[2] *= self.camera_resolution[0]
+        norm_obs[1] *= self.camera_resolution[1]
+        norm_obs[3] *= self.camera_resolution[1]
+        return norm_obs
+
+    def cost(self, gx, gy, rx, ry):
+        """
+
+        euclidean distance cost function """
         # print(f"red: {pred_batch}")
         # print(f"grn: {target_batch}")
-        cost = tf.sqrt(tf.square(observation[:, 0] - observation[:, 2])
-                       + tf.square(observation[:, 1] - observation[:, 3]))
-        return tf.squeeze(tf.cast(cost, tf.float32) / self._wall_diagonal_pixels)
+        cost = tf.sqrt(tf.square(gx - rx) + tf.square(gy - ry))
+        return tf.squeeze(tf.cast(cost, tf.float32))
 
-    def reward(self, observation):
-        return 1. - self.cost(observation)
+    def reward(self, obs, old_obs):
+        """
+        :param obs: [gx, gy, rx, ry](t)
+        :param old_obs: [gx, gy, rx, ry](t-1)
+        :return:
+        """
+        gx0 = old_obs[:, 0]
+        gy0 = old_obs[:, 1]
+        gx1 = obs[:, 0]
+        gy1 = obs[:, 1]
+        rx0 = old_obs[:, 2]
+        ry0 = old_obs[:, 3]
+        c0 = self.cost(gx0, gy0, rx0, ry0)  # old cost
+        c1 = self.cost(gx1, gy1, rx0, ry0)  # new cost
+        return 1 - c0 - c1 + c0**2 - c1**2
 
 
 class PathGenerator:
 
-    def __init__(self, resolution=Transformations.camera_resolution):
+    def __init__(self, **kwargs):
         self.env = Transformations()
-        self.resolution = resolution
+        self.resolution = tuple(kwargs["resolution"]) if "resolution" in kwargs.keys() else Transformations.camera_resolution
+        self._initial_angles = tuple(kwargs["initial_angles"]) if "initial_angles" in kwargs.keys() else (90, 90)
+        self.seed = int(kwargs["seed"]) if "seed" in kwargs.keys() else None
+
+        self._last_angles = self._initial_angles
+        self.rng = np.random.default_rng(self.seed)
+
+    @property
+    def initial_angles(self):
+        return self._initial_angles
+
+    @initial_angles.setter
+    def initial_angles(self, value: tuple):
+        assert type(value) == Sequence
+        assert len(value) == 2
+        if self._last_angles == self._initial_angles:
+            self._last_angles = tuple(value)
+        self._initial_angles = tuple(value)
+
+    def random_gen(self, angle_bounds: tuple, max_angle_step: int, return_angles=False):
+        assert len(angle_bounds) == 2
+        a_min = angle_bounds[0]
+        a_max = angle_bounds[1]
+
+        while True:
+            angles = self._last_angles + self.rng.uniform(-1, 1, 2)*max_angle_step
+            angles = [min(a_max, max(a_min, a)) for a in angles]
+
+            self._last_angles = angles
+
+            if return_angles:
+                yield angles
+            else:
+                yield self.env.angle_to_pixel(angles)
+        # angles = angle_bounds[0] + self.rng.random(2)*(angle_bounds[1] - angle_bounds[0])
 
     def ellipse(self, scale=0.5, resolution=0.1*np.pi, circle=False, return_angles=False):
         """ generate pixel or servo angle points, which result in elliptical shape
@@ -161,7 +223,7 @@ class PathGenerator:
         if return_angles:
             x, y = self._generate_ellipse_angles(x, y)
 
-        return itertools.cycle(x), itertools.cycle(y)
+        return itertools.cycle(zip(x, y))
 
     def _generate_ellipse_angles(self, xs, ys):
         # convert pixel path to servo angles

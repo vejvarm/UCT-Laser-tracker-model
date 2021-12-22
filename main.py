@@ -1,26 +1,22 @@
 import time
 
-import numpy as np
 import tensorflow as tf
 from numpy import random
+from tensorflow.keras import metrics
+from tf_agents.agents.ddpg import ddpg_agent, critic_network
+from tf_agents.agents.sac import sac_agent
+from tf_agents.agents.sac import tanh_normal_projection_network
+from tf_agents.drivers import dynamic_step_driver
+from tf_agents.environments import tf_py_environment
+from tf_agents.networks import actor_distribution_network
+from tf_agents.policies import random_tf_policy
+from tf_agents.replay_buffers import tf_uniform_replay_buffer
+from tf_agents.train.utils import strategy_utils
+from tf_agents.train.utils import train_utils
 
 from agents import SupervisedAgent
 from environment import LaserTracker, Wall
 from transformations import Transformations, PathGenerator
-from tf_agents.environments import tf_py_environment, tf_environment
-from tf_agents.environments import utils
-
-from tf_agents.environments import suite_gym
-from tf_agents.environments import tf_py_environment
-from tf_agents.networks import actor_distribution_network
-from tf_agents.specs import BoundedArraySpec, tensor_spec
-from tf_agents.agents.reinforce import reinforce_agent
-from tf_agents.replay_buffers import tf_uniform_replay_buffer
-from tf_agents.drivers import py_driver
-from tf_agents.policies import py_tf_eager_policy
-from tf_agents.drivers import dynamic_step_driver, dynamic_episode_driver
-
-from tensorflow.keras import metrics
 
 tf.keras.backend.set_floatx('float32')
 
@@ -104,26 +100,38 @@ def run_rl_agent():
 
 
 if __name__ == '__main__':
+    
+
     # 00 HYPERPARAMS
-    num_runs = 10
-    num_iterations = 50  # @param {type:"integer"}
-    collect_episodes_per_iteration = 10  # @param {type:"integer"}
-    replay_buffer_capacity = 500  # @param {type:"integer"}
+    num_runs = 100
+    sequence_length = 2  # @param {type:"integer"}
+    initial_collect_steps = 128
+    collect_steps_per_iteration = 128  # @param {type:"integer"}
+    sample_batch_size = 32
+    replay_buffer_capacity = 1280  # @param {type:"integer"}
 
-    fc_layer_params = (256, 128, 64)
+    actor_fc_layers = (64, )
+    critic_fc_layers = (64, )
 
-    learning_rate = 1e-5  # @param {type:"number"}
+    lr_actor = 1e-4  # @param {type:"number"}
+    lr_critic = 1e-4
+    lr_alpha = 1e-4
+    target_update_tau = 0.005  # @param {type:"number"}
+    target_update_period = 1  # @param {type:"number"}
+    gamma = 0.9  # @param {type:"number"}
+    reward_scale_factor = 1  # @param {type:"number"}
     log_interval = 25  # @param {type:"integer"}
     num_eval_episodes = 10  # @param {type:"integer"}
     eval_interval = 50  # @param {type:"integer"}
 
     # 01 THE ENVIRONMENT
-    train_env_py = LaserTracker(visualize=False, speed_restrictions=False)
-    eval_env_py = LaserTracker(visualize=False, speed_restrictions=False)
+    train_env_py = LaserTracker(visualize=False, speed_restrictions=True, angle_bounds=(40, 140), max_angle_step=20, target_path="circle")
+    eval_env_py = LaserTracker(visualize=False, speed_restrictions=True, angle_bounds=(40, 140), target_path="circle")
 
     # convert to Tensorflow compatible environments
     train_env = tf_py_environment.TFPyEnvironment(train_env_py)
     eval_env = tf_py_environment.TFPyEnvironment(eval_env_py)
+
 #    utils.validate_py_environment(train_env, episodes=5)
 
     # print(train_env.reset())
@@ -132,33 +140,74 @@ if __name__ == '__main__':
     # print("TimeStep Specs:", train_env.time_step_spec())
     # print("Action Specs:", train_env.action_spec())
 
+    # 01b THE STRATEGY
+    use_gpu = True
+    strategy = strategy_utils.get_strategy(tpu=False, use_gpu=use_gpu)
+
     # 02 THE AGENT
-    actor_net = actor_distribution_network.ActorDistributionNetwork(
-        train_env.observation_spec(),  # BoundedArraySpec(shape=(4, ), dtype=dtype('float32'), name='observation', minimum=[-4.8000002e+00 -3.4028235e+38 -4.1887903e-01 -3.4028235e+38], maximum=[4.8000002e+00 3.4028235e+38 4.1887903e-01 3.4028235e+38])
-        train_env.action_spec(),       # BoundedArraySpec(shape=(2, ), dtype=dtype('float32'), name='action', minimum=0, maximum=180)
-        fc_layer_params=fc_layer_params
-    )
+    with strategy.scope():
+        actor_net = actor_distribution_network.ActorDistributionNetwork(
+            train_env.observation_spec(),   # BoundedArraySpec(shape=(4, ), dtype=dtype('float32'), name='observation', minimum=[-4.8000002e+00 -3.4028235e+38 -4.1887903e-01 -3.4028235e+38], maximum=[4.8000002e+00 3.4028235e+38 4.1887903e-01 3.4028235e+38])
+            train_env.action_spec(),        # BoundedArraySpec(shape=(2, ), dtype=dtype('float32'), name='action', minimum=0, maximum=180)
+            fc_layer_params=actor_fc_layers,
+            continuous_projection_net=tanh_normal_projection_network.TanhNormalProjectionNetwork
+        )
 
-    # create optimizer
-    optimizer = tf.optimizers.Adam(learning_rate=learning_rate)
+        # critic_net = value_network.ValueNetwork(
+        #     train_env.observation_spec(),
+        #     fc_layer_params=critic_fc_layers,
+        # )
 
-    train_step_counter = tf.Variable(0)
+        critic_net = critic_network.CriticNetwork(
+            (train_env.observation_spec(), train_env.action_spec()),
+            observation_fc_layer_params=None,
+            action_fc_layer_params=None,
+            joint_fc_layer_params=critic_fc_layers,
+            kernel_initializer='glorot_uniform',
+            last_kernel_initializer='glorot_uniform'
+        )
 
-    tf_agent = reinforce_agent.ReinforceAgent(
-        train_env.time_step_spec(),  # what is this? (oh it's just state of given time step)
-        train_env.action_spec(),
-        actor_network=actor_net,
-        optimizer=optimizer,
-        normalize_returns=True,
-        train_step_counter=train_step_counter
-    )
+        # create optimizer
+        actor_opt = tf.optimizers.Adam(learning_rate=lr_actor)
+        critic_opt = tf.optimizers.Adam(learning_rate=lr_critic)
+        alpha_opt = tf.optimizers.Adam(learning_rate=lr_alpha)
 
-    tf_agent.initialize()  # initialize RL Reinforce agent
-    print(tf_agent.collect_data_spec)
+    # tf_agent = reinforce_agent.ReinforceAgent(
+    #     train_env.time_step_spec(),  # what is this? (oh it's just state of given time step)
+    #     train_env.action_spec(),
+    #     actor_network=actor_net,
+    #     optimizer=optimizer,
+    #     normalize_returns=True,
+    #     train_step_counter=train_step_counter
+    # )
+
+    with strategy.scope():
+        train_step_counter = train_utils.create_train_step()
+
+        tf_agent = sac_agent.SacAgent(
+            train_env.time_step_spec(),
+            train_env.action_spec(),
+            actor_network=actor_net,
+            critic_network=critic_net,
+            actor_optimizer=actor_opt,
+            critic_optimizer=critic_opt,
+            alpha_optimizer=alpha_opt,
+            target_update_tau=target_update_tau,
+            target_update_period=target_update_period,
+            td_errors_loss_fn=tf.math.squared_difference,
+            gamma=gamma,
+            reward_scale_factor=reward_scale_factor,
+            train_step_counter=train_step_counter,
+        )
+
+        # DONE: We need sequential replay buffer to get sequence of 2 subsequent time steps (for DDPG Agent)
+
+        tf_agent.initialize()  # initialize RL Reinforce agent
 
     # 03 P0LICY
     eval_policy = tf_agent.policy  # used for evaluation/deployment/production
     collect_policy = tf_agent.collect_policy  # used for data collection
+    random_policy = random_tf_policy.RandomTFPolicy(train_env.time_step_spec(), train_env.action_spec())
 
     # 04 METRICS (see function compute_avg_return @top-of-file)
     # 05 REPLAY BUFFER
@@ -170,37 +219,74 @@ if __name__ == '__main__':
     # Add an observer that adds to the replay buffer:
     replay_observer = [replay_buffer.add_batch]
 
-    print(replay_observer)
+    # Collect initial data with random policy
+    initial_driver = dynamic_step_driver.DynamicStepDriver(train_env,
+                                                           random_policy,
+                                                           observers=replay_observer,
+                                                           num_steps=initial_collect_steps)
+    final_time_step, _ = initial_driver.run()
 
-    driver = dynamic_episode_driver.DynamicEpisodeDriver(train_env,
-                                                         tf_agent.collect_policy,
-                                                         observers=replay_observer,
-                                                         num_episodes=collect_episodes_per_iteration)
+    driver = dynamic_step_driver.DynamicStepDriver(train_env,
+                                                   tf_agent.collect_policy,
+                                                   observers=replay_observer,
+                                                   num_steps=collect_steps_per_iteration)
     # DONE: This is never gonna end, because we have to define WHEN is the END of the EPISODE
 
     loss_mean = metrics.Mean()
-    for _ in range(num_runs):
+    for r in range(num_runs):
 
         final_time_step, policy_state = driver.run()  # DONE: there is a problem with shapes!
 
         # Read the replay buffer as a Dataset,
-        # read batches of 4 elements, each with 50 timesteps:
+        # read batches of 'sample_batch_size' elements, each with 'sequence_length' timesteps:
         dataset = replay_buffer.as_dataset(
-            sample_batch_size=5,
-            num_steps=num_iterations)  # must be same as steps_per_ep in LaserTracker env!
+            sample_batch_size=sample_batch_size,
+            num_steps=sequence_length)
 
         loss_mean.reset_state()
-        for _ in range(num_iterations):
-            iterator = iter(dataset)
-            trajectories, _ = next(iterator)
-            # print(trajectories)
-            loss = tf_agent.train(experience=trajectories)
+        iterator = iter(dataset)
+        for _ in range(collect_steps_per_iteration//sample_batch_size):
+            t1, probs1 = next(iterator)
+            # print(f"obs: {t1.observation.numpy()}, reward: {t1.reward[0].numpy()}")
+            # DONE: map two subsequent steps in Trajectory to shape (bs, 2, ... rest, ...)
+            loss = tf_agent.train(experience=t1)
             loss_mean.update_state(loss.loss)
-        print(loss_mean.result())
+            # break
+        # action = tf_agent.policy.action(final_time_step)
+        print(f"run {r:03d}:  {loss_mean.result():.2f}")
+        # break
+        # TODO: Make production function to evaluate visually how the agent is doing
+        # TODO: DONT FORGET TO DENORMALIZE OBSERVATIONS DURING PRODUCTION with visualization
+
+
+    # EVALUATION:
+    pth_gen = PathGenerator()
+    wall = Wall(blit=True)
+    trans = Transformations()
+
+    time_step = eval_env.reset()
+    while True:
+
+        pred_angles = eval_policy.action(time_step)
+        time_step = eval_env.step(pred_angles)
+
+        obs = trans.denormalize_obs(tf.squeeze(time_step.observation).numpy())
+
+        grn_pos = obs[0:2]
+        red_pos = obs[2:]
+
+        wall.update(red_pos, grn_pos)
+        time.sleep(0.01)
+        # break
+
+
+
 
 
 # DONE: REINFORCE requires full episodes to compute losses.
-# TODO: How not to instantly explode into 0,180 angle bounds?
+# TODO: It doesn't care about rewards at all
+# TODO: Cummulative Reward for multiple steps?
+# DONE: How not to instantly explode into 0,180 angle bounds?
 # TODO: make reward function based on distance + efficienty of movement + punishment for not moving
 # TODO: enforce boundaries for agent to not go out of bounds of the working area (maybe also implement bigger punishment for doing so)
 # TODO: make parralelizable for multiagent training

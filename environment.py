@@ -50,7 +50,7 @@ class Servo:
 
     @__enforce_bounds
     def set_angle(self, angle):
-        self._angle = angle
+        self._angle = int(angle)
 
     @__enforce_bounds
     def set_default_angle(self, angle):
@@ -61,9 +61,9 @@ class Servo:
         if angle == self._angle:
             pass
         elif angle < self._angle:
-            self._angle = max(self._angle - self.__speed, angle)
+            self._angle = int(max(self._angle - self.__speed, angle))
         else:
-            self._angle = min(self._angle + self.__speed, angle)
+            self._angle = int(min(self._angle + self.__speed, angle))
 
     @__enforce_bounds
     def get_dot_wall_position(self, angle, fov, axis=0, angle2=90, angle2_default=90):
@@ -171,19 +171,20 @@ class Laser:
 
 class LaserTracker(py_environment.PyEnvironment, ABC):
 
-    def __init__(self, lasers=(None, None), visualize=False, speed_restrictions=True, steps_per_ep=50):
+    def __init__(self, lasers=(None, None), visualize=False, speed_restrictions=True, steps_per_ep=1000,
+                 angle_bounds=(0, 180), max_angle_step=10, target_path="random"):
         super().__init__()
         self.env = Transformations()
 
         self._action_spec = array_spec.BoundedArraySpec(
-            shape=(2, ), dtype=np.float32, minimum=0, maximum=180, name='action')
+            shape=(2, ), dtype=np.float32, minimum=angle_bounds[0], maximum=angle_bounds[1], name='action')
         self._observation_spec = array_spec.BoundedArraySpec(
-            shape=(4,), dtype=np.float32, minimum=0, maximum=self.env.camera_resolution[0], name='observation')
-        self._observation = np.zeros(shape=4, dtype=np.float32)
+            shape=(4,), dtype=np.float32, minimum=0, maximum=1., name='observation')
         self._episode_ended = False
         self.speed_restrictions = speed_restrictions
         self._steps_per_ep = steps_per_ep
         self._step_counter = 0
+        self._reward_sum = 0.
 
         if lasers[0] is None:
             self._laser_red = Laser()
@@ -199,12 +200,19 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
         self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
         self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
 
+        self._observation = np.zeros(shape=4, dtype=np.float32)
+        self._old_observation = np.zeros_like(self._observation)
+        self._observation[:] = self.env.normalize_obs([*self.green_pos, *self.red_pos])  # normalize to [0,1) float
+        self._old_observation[:] = self.env.normalize_obs([*self.green_pos, *self.red_pos])  # normalize to [0,1) float
+
         if self.visualize:
             self.wall = Wall(blit=True)
         else:
             self.wall = None
 
-        self.default_path_x, self.default_path_y = generate_path()
+        self.default_path = generate_path(path_type=target_path,
+                                          angle_bounds=angle_bounds,
+                                          max_angle_step=max_angle_step)
 
     def action_spec(self):
         return self._action_spec
@@ -213,8 +221,9 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
         return self._observation_spec
 
     def _reset(self):
-        self._observation = np.zeros(shape=4, dtype=np.float32)
+        self._observation[:] = self.env.normalize_obs([*self.green_pos, *self.red_pos])  # normalize to [0,1) float
         self._step_counter = 0
+        self._reward_sum = 0.
         self._episode_ended = False
         return ts.restart(self._observation)
 
@@ -226,30 +235,36 @@ class LaserTracker(py_environment.PyEnvironment, ABC):
             # a new episode.
             return self.reset()
 
-        x_red = next(self.default_path_x)
-        y_red = next(self.default_path_y)
-
         # move green laser based on agent inputs
+        # print(action)
         _ = self._laser_green.move_angle_tick(action[0], action[1], self.speed_restrictions)
-        print(action)
-
         self.green_pos = (self._laser_green.wall_pos_x, self._laser_green.wall_pos_y)
-        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
-        self._observation[:] = [*self.green_pos, *self.red_pos]  # DONE: There was a problem with dtype being float64!
 
         # move red laser based on path from path_gen
+        x_red, y_red = next(self.default_path)
         done = self._laser_red.move_angle_tick(x_red, y_red, self.speed_restrictions)
+        # rebase observation with new red position
+        self.red_pos = (self._laser_red.wall_pos_x, self._laser_red.wall_pos_y)
+
+        # update observation
+        self._observation[:] = self.env.normalize_obs([*self.green_pos, *self.red_pos])  # normalize to [0,1) float
 
         # End episode after self._steps_per_ep
         if self._step_counter >= self._steps_per_ep:
             self._episode_ended = True
 
-        reward = self.env.reward(np.expand_dims(self._observation, 0))
-        reward = -1e10 if reward == -np.inf else reward  # TODO: find other way to normalize reward and remove -inf
+        # calculate reward
+        reward = self.env.reward(np.expand_dims(self._observation, 0), np.expand_dims(self._old_observation, 0))
+        self._reward_sum += reward
+
+        # update old observation
+        self._old_observation[:] = [*self._observation]  # normalize to [0,1) float
+
         if self._episode_ended:
+            print(self._reward_sum/self._step_counter)
             return ts.termination(self._observation, reward)
         else:
-            return ts.transition(self._observation, reward=reward, discount=1.0)
+            return ts.transition(self._observation, reward=reward, discount=.99)
 
 
 class Wall:
