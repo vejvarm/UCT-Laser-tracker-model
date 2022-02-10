@@ -7,7 +7,7 @@ from tf_agents.agents.ddpg import ddpg_agent, critic_network
 from tf_agents.agents.sac import sac_agent
 from tf_agents.agents.sac import tanh_normal_projection_network
 from tf_agents.drivers import dynamic_step_driver
-from tf_agents.environments import tf_py_environment
+from tf_agents.environments import tf_py_environment, suite_gym
 from tf_agents.networks import actor_distribution_network
 from tf_agents.policies import random_tf_policy
 from tf_agents.replay_buffers import tf_uniform_replay_buffer
@@ -103,37 +103,45 @@ def run_rl_agent():
 
 
 if __name__ == '__main__':
-    
+
+    env_name = "Pendulum-v1"
 
     # 00 HYPERPARAMS
-    num_runs = 100
+    num_runs = 1000
     sequence_length = 2  # @param {type:"integer"}
-    initial_collect_steps = 128
+    initial_collect_steps = 64
     collect_steps_per_iteration = 128  # @param {type:"integer"}
     sample_batch_size = 32
-    replay_buffer_capacity = 1280  # @param {type:"integer"}
+    replay_buffer_capacity = 512  # @param {type:"integer"}
 
-    actor_fc_layers = (64, )
-    critic_fc_layers = (64, )
+    actor_fc_layers = (32, )
+    critic_fc_layers = (32, )
 
     lr_actor = 1e-4  # @param {type:"number"}
-    lr_critic = 1e-4
+    lr_critic = 1e-4  # TODO: increased from 1e-4
     lr_alpha = 1e-4
-    target_update_tau = 0.005  # @param {type:"number"}
+    target_update_tau = 0.05  # @param {type:"number"} # TODO: increased from 0.005
     target_update_period = 1  # @param {type:"number"}
-    gamma = 0.9  # @param {type:"number"}
+    gamma = 0.9  # @param {type:"number"} # TODO: increased from 0.9
     reward_scale_factor = 1  # @param {type:"number"}
     log_interval = 25  # @param {type:"integer"}
     num_eval_episodes = 10  # @param {type:"integer"}
     eval_interval = 50  # @param {type:"integer"}
 
     # 01 THE ENVIRONMENT
-    train_env_py = LaserTracker(visualize=False, speed_restrictions=True, angle_bounds=(40, 140), max_angle_step=20, target_path="circle")
-    eval_env_py = LaserTracker(visualize=False, speed_restrictions=True, angle_bounds=(40, 140), target_path="circle")
+    train_py_env = suite_gym.load(env_name)
+    eval_py_env = suite_gym.load(env_name)
+
+    train_env = tf_py_environment.TFPyEnvironment(train_py_env)
+    eval_env = tf_py_environment.TFPyEnvironment(eval_py_env)
+
+    # train_env_py = LaserTracker(visualize=False, speed_restrictions=True, angle_bounds=(40, 140), max_angle_step=20, target_path="circle")
+    # eval_env_py = LaserTracker(visualize=False, speed_restrictions=True, angle_bounds=(40, 140), target_path="circle")
 
     # convert to Tensorflow compatible environments
-    train_env = tf_py_environment.TFPyEnvironment(train_env_py)
-    eval_env = tf_py_environment.TFPyEnvironment(eval_env_py)
+    # train_env = tf_py_environment.TFPyEnvironment(train_env_py)
+    # eval_env = tf_py_environment.TFPyEnvironment(eval_env_py)
+
 
 #    utils.validate_py_environment(train_env, episodes=5)
 
@@ -270,17 +278,18 @@ if __name__ == '__main__':
     time_step = eval_env.reset()
     while True:
 
-        pred_angles = eval_policy.action(time_step)
-        time_step = eval_env.step(pred_angles)
-
-        obs = trans.denormalize_obs(tf.squeeze(time_step.observation).numpy())
-
-        grn_pos = obs[0:2]
-        red_pos = obs[2:]
-
-        wall.update(red_pos, grn_pos)
-        time.sleep(0.01)
-        # break
+        action = eval_policy.action(time_step)
+        time_step = eval_env.step(action)
+        eval_env.render()
+        #
+        # obs = trans.denormalize_obs(tf.squeeze(time_step.observation).numpy())
+        #
+        # grn_pos = obs[0:2]
+        # red_pos = obs[2:]
+        #
+        # wall.update(red_pos, grn_pos)
+        # time.sleep(0.01)
+        # # break
 
 
 
